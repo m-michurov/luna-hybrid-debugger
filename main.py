@@ -227,7 +227,7 @@ def generate_assertions(src_path: Path, ja_path: Path, ti_path: Path) -> None:
 
 
 def main() -> None:
-    luna_src_path: Final[Path] = Path() / 'tests'
+    luna_src_path: Final[Path] = Path() / 'tests' / '01_for' / '01_simple'
     luna_build_path: Final[Path] = luna_src_path / 'build'
 
     luna_ja_only_path = Path(__file__).parent / 'luna_ja_only' / 'luna'
