@@ -138,14 +138,14 @@ def find_use_loops(sub: dict, program: dict) -> dict[str, list[dict]]:
         for_var_name = statement['var']
 
         for body_statement in statement['body']:
-            # TODO handle consumptions in loop bounds
+            # TODO handle consumptions in loop bounds, conditions, etc
+            # TODO handle consumptions in subexpressions
             if body_statement['type'] != 'exec':
                 continue
 
             code_fragment_name = body_statement['code']
             code_fragment = program[code_fragment_name]
 
-            # TODO handle consumptions in subexpressions
             for formal, actual in zip(code_fragment['args'], body_statement['args']):
                 if formal['type'] == 'name':
                     continue
@@ -165,6 +165,9 @@ def find_use_loops(sub: dict, program: dict) -> dict[str, list[dict]]:
 ASSERT_IMPORT_JA: Final[str] = 'import c_assert(int, string) as assert;'
 
 
+# TODO handle init/use loops in subs - pass loop bounds as parameters if needed
+# TODO handle single uses
+# TODO handle init/use conditions
 def generate_assertions(src_path: Path, ja_path: Path, ti_path: Path) -> None:
     ja: dict = json.loads(ja_path.read_text())
     ti = TextInfo(json.loads(ti_path.read_text()))
@@ -183,7 +186,6 @@ def generate_assertions(src_path: Path, ja_path: Path, ti_path: Path) -> None:
 
         for use_loop in name_use_loops:
             file_name = ti.file_name(use_loop['begin'])
-            # TODO make copies with assertions in a separate directory, keep filenames to not mess up includes
             file_path = src_path / file_name
 
             if file_name not in source_file_lines:
