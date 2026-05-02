@@ -12,7 +12,7 @@ extern "C" {
         }
 
         fprintf(stderr, "Assertion %s failed\n", condition_string);
-        // throw std::runtime_error("Assertion failed");
-        exit(EXIT_FAILURE);
+        throw std::runtime_error("generated assertion failed");
+        // exit(EXIT_FAILURE);
     }
 }

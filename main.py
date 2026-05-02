@@ -1,8 +1,8 @@
 import json
-import os
 import re
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import Final
 
@@ -95,8 +95,8 @@ def print_statement(statement: dict, indent: int = 0) -> None:
             assert False, 'unknown statement'
 
 
-def find_init_loops(sub: dict, program: dict) -> dict[str, list[dict]]:
-    result: dict[str, list[dict]] = {}
+def find_init_loops(sub: dict, program: dict) -> dict[str, list[tuple[list, dict]]]:
+    result: dict[str, list[tuple[list, dict]]] = {}
 
     for statement in sub['body']:
         if statement['type'] != 'for':
@@ -123,13 +123,13 @@ def find_init_loops(sub: dict, program: dict) -> dict[str, list[dict]]:
                 if index['ref'] != [for_var_name]:
                     continue
 
-                result[base_name] = result.get(base_name, []) + [statement]
+                result[base_name] = result.get(base_name, []) + [(sub['body'], statement)]
 
     return result
 
 
-def find_use_loops(sub: dict, program: dict) -> dict[str, list[dict]]:
-    result: dict[str, list[dict]] = {}
+def find_use_loops(sub: dict, program: dict) -> dict[str, list[tuple[list, dict]]]:
+    result: dict[str, list[tuple[list, dict]]] = {}
 
     for statement in sub['body']:
         if statement['type'] != 'for':
@@ -157,7 +157,7 @@ def find_use_loops(sub: dict, program: dict) -> dict[str, list[dict]]:
                 if index['ref'] != [for_var_name]:
                     continue
 
-                result[base_name] = result.get(base_name, []) + [statement]
+                result[base_name] = result.get(base_name, []) + [(sub['body'], statement)]
 
     return result
 
@@ -168,9 +168,24 @@ ASSERT_IMPORT_JA: Final[str] = 'import c_assert(int, string) as assert;'
 # TODO handle init/use loops in subs - pass loop bounds as parameters if needed
 # TODO handle single uses
 # TODO handle init/use conditions
-def generate_assertions(src_path: Path, ja_path: Path, ti_path: Path) -> None:
-    ja: dict = json.loads(ja_path.read_text())
-    ti = TextInfo(json.loads(ti_path.read_text()))
+def generate_assertions(src_path: Path, ja: dict, ti: TextInfo) -> dict:
+    assertions_count = 0
+
+    ja_with_assertions = ja
+    ja_with_assertions['assert'] = {
+        'args': [
+            {
+                'type': 'int'
+            },
+            {
+                'type': 'string'
+            }
+        ],
+        'code': 'c_assert',
+        'code_type': 'default',
+        'rules': [],
+        'type': 'extern'
+    }
 
     init_loops = find_init_loops(ja['main'], ja)
     use_loops = find_use_loops(ja['main'], ja)
@@ -179,12 +194,12 @@ def generate_assertions(src_path: Path, ja_path: Path, ti_path: Path) -> None:
 
     for base_name, name_use_loops in use_loops.items():
         assert len(init_loops[base_name]) == 1
-        init_loop = init_loops[base_name][0]
+        _, init_loop = init_loops[base_name][0]
 
         init_first = init_loop['first']
         init_last = init_loop['last']
 
-        for use_loop in name_use_loops:
+        for body, use_loop in name_use_loops:
             file_name = ti.file_name(use_loop['begin'])
             file_path = src_path / file_name
 
@@ -196,36 +211,57 @@ def generate_assertions(src_path: Path, ja_path: Path, ti_path: Path) -> None:
             use_first = use_loop['first']
             use_last = use_loop['last']
 
-            # assert_comment = f'// generated assert for {base_name}, file {file_name}'
-
-            assertions_ja = [
-                f'{ja_expression_to_str(use_first)} >= {ja_expression_to_str(init_first)}',
-                f'{ja_expression_to_str(use_last)} <= {ja_expression_to_str(init_last)}'
+            asserts_ja = [
+                {
+                    'type': 'exec',
+                    'code': 'assert',
+                    'id': ['_l0'],
+                    'args': [
+                        {
+                            'is_expr': True,
+                            'type': '<=',
+                            'operands': [init_first, use_first],
+                            'op_pos': 0
+                        },
+                        {
+                            'is_expr': True,
+                            'type': 'sconst',
+                            'value': f'{ja_expression_to_str(init_first)} <= {ja_expression_to_str(use_first)} use {base_name})'
+                        }
+                    ],
+                    'rules': [],
+                    'begin': 0
+                },
+                {
+                    'type': 'exec',
+                    'code': 'assert',
+                    'id': ['_l0'],
+                    'args': [
+                        {
+                            'is_expr': True,
+                            'type': '<=',
+                            'operands': [use_last, init_last],
+                            'op_pos': 0
+                        },
+                        {
+                            'is_expr': True,
+                            'type': 'sconst',
+                            'value': f'{ja_expression_to_str(use_last)} <= {ja_expression_to_str(init_last)} use {base_name})'
+                        }
+                    ],
+                    'rules': [],
+                    'begin': 0
+                },
             ]
-            for assertion_ja in assertions_ja:
-                # TODO this only works if each statement starts on a new line
-                # TODO cannot use 'begin' to insert assertions because it refers to preprocessed.fa, not the original file
-                loop_line_number = ti.line_number(use_loop['begin'])
-                loop_line = source_file_lines[file_name][loop_line_number - 1]
-                indent = 0
-                while loop_line[indent] == ' ':
-                    indent += 1
+            for assert_ja in asserts_ja:
+                body.append(assert_ja)
+                assertions_count += 1
 
-                padding = ' ' * indent
-                source_file_lines[file_name][loop_line_number - 1] = (
-                    # f'{padding}{assert_comment}\n'
-                    f'{padding}assert({assertion_ja}, "{assertion_ja} (use {base_name})");\n'
-                    f'{loop_line}'
-                )
+    shutil.copyfile(src=C_ASSERT_CPP_PATH, dst=src_path / C_ASSERT_CPP_PATH.name)
 
-    src_with_assertions_path = src_path / 'with_assertions'
+    print(f'Generated {assertions_count} assertion(s)')
 
-    for file_name, lines in source_file_lines.items():
-        file_path = src_with_assertions_path / file_name
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        file_path.write_text('\n'.join(lines))
-
-    shutil.copyfile(src=C_ASSERT_CPP_PATH, dst=src_with_assertions_path / C_ASSERT_CPP_PATH.name)
+    return ja_with_assertions
 
 
 def main() -> None:
@@ -233,6 +269,7 @@ def main() -> None:
     luna_build_path: Final[Path] = luna_src_path / 'build'
 
     luna_ja_only_path = Path(__file__).parent / 'luna_ja_only' / 'luna'
+    luna_after_ja_path = Path(__file__).parent / 'luna_after_ja' / 'luna'
 
     try:
         subprocess.run(
@@ -241,24 +278,34 @@ def main() -> None:
                 str(luna_ja_only_path.absolute()),
                 '-q',
                 '--compile-only',
-                f'--build-dir={str(luna_build_path.name)}',
+                f'--build-dir={str(luna_build_path.absolute())}',
                 *[it.name for it in luna_src_path.iterdir() if it.suffix == '.fa'],
             ],
             cwd=luna_src_path,
-            env=os.environ,
             capture_output=True,
             check=True
         )
     except subprocess.CalledProcessError as e:
-        print(e.stderr.decode())
+        print(e.args)
+        print(e.stderr.decode(), file=sys.stderr)
+        return
 
-    generate_assertions(
+    ja_with_assertions = generate_assertions(
         src_path=luna_src_path,
-        ja_path=luna_build_path / 'program_recom.ja',
-        ti_path=luna_build_path / 'preprocessed.fa.ti'
+        ja=json.loads(luna_build_path.joinpath('program_foreign.ja').read_text(encoding='utf-8')),
+        ti=TextInfo(json.loads(luna_build_path.joinpath('preprocessed.fa.ti').read_text(encoding='utf-8'))),
     )
 
-    shutil.rmtree(luna_build_path)
+    luna_build_path.joinpath('program_foreign.ja').rename(luna_build_path.joinpath('program_foreign.bak.ja'))
+    luna_build_path.joinpath('program_foreign.ja') \
+        .write_text(json.dumps(ja_with_assertions, indent=2), encoding='utf-8')
+
+    print('Run modified program with:')
+    print(
+        f'{luna_after_ja_path.absolute()} '
+        f'--build-dir={str(luna_build_path.absolute())} '
+        f'{' '.join(str(it.absolute()) for it in luna_src_path.iterdir() if it.suffix == '.fa')}'
+    )
 
 
 if __name__ == '__main__':

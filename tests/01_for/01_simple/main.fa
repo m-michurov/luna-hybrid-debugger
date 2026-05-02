@@ -4,8 +4,8 @@ C++ sub print(int v) ${{ printf("%d\n", v); $}}
 sub main() {
     df x, y, N, M;
 
-    set_int(N, 10);
-    set_int(M, 11);
+    cf set_int[0]: set_int(N, 10);
+    cf set_int[0]: set_int(M, 11);
 
     for i = 0..N {
         set_int(x[i], i);
