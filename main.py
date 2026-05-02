@@ -286,9 +286,8 @@ def main() -> None:
             check=True
         )
     except subprocess.CalledProcessError as e:
-        print(e.args)
         print(e.stderr.decode(), file=sys.stderr)
-        return
+        sys.exit(1)
 
     ja_with_assertions = generate_assertions(
         src_path=luna_src_path,
@@ -302,9 +301,11 @@ def main() -> None:
 
     print('Run modified program with:')
     print(
-        f'{luna_after_ja_path.absolute()} '
-        f'--build-dir={str(luna_build_path.absolute())} '
-        f'{' '.join(str(it.absolute()) for it in luna_src_path.iterdir() if it.suffix == '.fa')}'
+        f'{luna_after_ja_path.absolute()}',
+        f'--build-dir={str(luna_build_path.absolute())}',
+        '--no-cleanup',
+        *(str(it.absolute()) for it in luna_src_path.iterdir() if it.suffix == '.fa'),
+        sep=' '
     )
 
 
