@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Final
 
-C_ASSERT_CPP_PATH: Final[Path] = Path(__file__).parent / 'c_assert.cpp'
+C_ASSERT_CPP_PATH: Final[Path] = Path(__file__).parent / '_c_generated_assert.cpp'
 
 
 class TextInfo:
@@ -161,18 +161,21 @@ def find_use_loops(sub: dict, program: dict) -> dict[str, list[tuple[list, dict]
 
     return result
 
+ASSERT_NAME_C: Final[str] = '_c_generated_assert'
+ASSERT_NAME_LUNA: Final[str] = '_generated_assert'
 
-ASSERT_IMPORT_JA: Final[str] = 'import c_assert(int, string) as assert;'
+ASSERT_IMPORT_JA: Final[str] = f'import {ASSERT_NAME_C}(int, string) as {ASSERT_NAME_LUNA};'
 
 
 # TODO handle init/use loops in subs - pass loop bounds as parameters if needed
 # TODO handle single uses
 # TODO handle init/use conditions
-def generate_assertions(src_path: Path, ja: dict, ti: TextInfo) -> dict:
+# TODO eliminate assertions that can be resolved statically
+def generate_assertions(src_path: Path, ja: dict, ti: TextInfo) -> tuple[int, dict]:
     assertions_count = 0
 
     ja_with_assertions = ja
-    ja_with_assertions['assert'] = {
+    ja_with_assertions[ASSERT_NAME_LUNA] = {
         'args': [
             {
                 'type': 'int'
@@ -181,7 +184,7 @@ def generate_assertions(src_path: Path, ja: dict, ti: TextInfo) -> dict:
                 'type': 'string'
             }
         ],
-        'code': 'c_assert',
+        'code': ASSERT_NAME_C,
         'code_type': 'default',
         'rules': [],
         'type': 'extern'
@@ -211,10 +214,11 @@ def generate_assertions(src_path: Path, ja: dict, ti: TextInfo) -> dict:
             use_first = use_loop['first']
             use_last = use_loop['last']
 
+            # TODO single assert
             asserts_ja = [
                 {
                     'type': 'exec',
-                    'code': 'assert',
+                    'code': ASSERT_NAME_LUNA,
                     'id': ['_l0'],
                     'args': [
                         {
@@ -234,7 +238,7 @@ def generate_assertions(src_path: Path, ja: dict, ti: TextInfo) -> dict:
                 },
                 {
                     'type': 'exec',
-                    'code': 'assert',
+                    'code': ASSERT_NAME_LUNA,
                     'id': ['_l0'],
                     'args': [
                         {
@@ -257,14 +261,11 @@ def generate_assertions(src_path: Path, ja: dict, ti: TextInfo) -> dict:
                 body.append(assert_ja)
                 assertions_count += 1
 
-    shutil.copyfile(src=C_ASSERT_CPP_PATH, dst=src_path / C_ASSERT_CPP_PATH.name)
-
-    print(f'Generated {assertions_count} assertion(s)')
-
-    return ja_with_assertions
+    return assertions_count, ja_with_assertions
 
 
 def main() -> None:
+    # TODO make this example work
     luna_src_path: Final[Path] = Path() / 'tests' / '01_for' / '01_simple'
     luna_build_path: Final[Path] = luna_src_path / 'build'
 
@@ -289,11 +290,18 @@ def main() -> None:
         print(e.stderr.decode(), file=sys.stderr)
         sys.exit(1)
 
-    ja_with_assertions = generate_assertions(
+    assertions_count, ja_with_assertions = generate_assertions(
         src_path=luna_src_path,
         ja=json.loads(luna_build_path.joinpath('program_foreign.ja').read_text(encoding='utf-8')),
         ti=TextInfo(json.loads(luna_build_path.joinpath('preprocessed.fa.ti').read_text(encoding='utf-8'))),
     )
+
+    print(f'Generated {assertions_count} assertion(s).')
+    if assertions_count <= 0:
+        print('Program was not modified.')
+        return
+
+    shutil.copyfile(src=C_ASSERT_CPP_PATH, dst=luna_src_path / C_ASSERT_CPP_PATH.name)
 
     luna_build_path.joinpath('program_foreign.ja').rename(luna_build_path.joinpath('program_foreign.bak.ja'))
     luna_build_path.joinpath('program_foreign.ja') \

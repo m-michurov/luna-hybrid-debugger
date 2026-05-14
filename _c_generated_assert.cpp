@@ -6,7 +6,7 @@
 using namespace luna::ucenv;
 
 extern "C" {
-    void c_assert(int condition, char const *condition_string) {
+    void _c_generated_assert(int condition, char const *condition_string) {
         if (condition) {
             return;
         }
