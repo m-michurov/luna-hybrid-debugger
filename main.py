@@ -66,6 +66,8 @@ def ja_expression_to_str(expr: dict) -> str:
             return ja_indexed_expression_to_str(expr)
         case 'iconst':
             return ja_arith_expression_to_str(expr)
+        case 'icast':
+            return f'int({ja_expression_to_str(expr['expr'])})'
         case op if op in JA_BINARY_OPERATORS or op in JA_UNARY_OPERATORS:
             return ja_arith_expression_to_str(expr)
         case unsupported_type:
@@ -161,6 +163,53 @@ def find_use_loops(sub: dict, program: dict) -> dict[str, list[tuple[list, dict]
 
     return result
 
+
+def find_conditional_single_inits(sub: dict, program: dict) -> dict[str, list[tuple[list, dict]]]:
+    result: dict[str, list[tuple[list, dict]]] = {}
+
+    for statement in sub['body']:
+        if statement['type'] != 'if':
+            continue
+
+        for body_statement in statement['body']:
+            # TODO handle initializations in while loops
+            if body_statement['type'] != 'exec':
+                continue
+
+            code_fragment_name = body_statement['code']
+            code_fragment = program[code_fragment_name]
+
+            for formal, actual in zip(code_fragment['args'], body_statement['args']):
+                if formal['type'] != 'name':
+                    continue
+
+                ref = ja_expression_to_str(actual)
+                result[ref] = result.get(ref, []) + [(sub['body'], statement)]
+
+    return result
+
+
+def find_single_uses(sub: dict, program: dict) -> dict[str, list[list]]:
+    result: dict[str, list[list]] = {}
+
+    for statement in sub['body']:
+        if statement['type'] == 'exec':
+            code_fragment_name = statement['code']
+            code_fragment = program[code_fragment_name]
+
+            for formal, actual in zip(code_fragment['args'], statement['args']):
+                if formal['type'] == 'name':
+                    continue
+
+                if actual['type'] != 'id':
+                    continue
+
+                ref = ja_expression_to_str(actual)
+                result[ref] = result.get(ref, []) + [sub['body']]
+
+    return result
+
+
 ASSERT_NAME_C: Final[str] = '_c_generated_assert'
 ASSERT_NAME_LUNA: Final[str] = '_generated_assert'
 
@@ -171,7 +220,7 @@ ASSERT_IMPORT_JA: Final[str] = f'import {ASSERT_NAME_C}(int, string) as {ASSERT_
 # TODO handle single uses
 # TODO handle init/use conditions
 # TODO eliminate assertions that can be resolved statically
-def generate_assertions(src_path: Path, ja: dict, ti: TextInfo) -> tuple[int, dict]:
+def generate_loop_assertions(ja: dict) -> tuple[int, dict]:
     assertions_count = 0
 
     ja_with_assertions = ja
@@ -193,8 +242,6 @@ def generate_assertions(src_path: Path, ja: dict, ti: TextInfo) -> tuple[int, di
     init_loops = find_init_loops(ja['main'], ja)
     use_loops = find_use_loops(ja['main'], ja)
 
-    source_file_lines: dict[str, list[str]] = {}
-
     for base_name, name_use_loops in use_loops.items():
         assert len(init_loops[base_name]) == 1
         _, init_loop = init_loops[base_name][0]
@@ -203,54 +250,97 @@ def generate_assertions(src_path: Path, ja: dict, ti: TextInfo) -> tuple[int, di
         init_last = init_loop['last']
 
         for body, use_loop in name_use_loops:
-            file_name = ti.file_name(use_loop['begin'])
-            file_path = src_path / file_name
-
-            if file_name not in source_file_lines:
-                source_file_lines[file_name] = file_path.read_text().splitlines()
-
-                source_file_lines[file_name][0] = f'{ASSERT_IMPORT_JA}\n{source_file_lines[file_name][0]}'
-
             use_first = use_loop['first']
             use_last = use_loop['last']
 
-            # TODO single assert
+            bounds_check_ja = {
+                'is_expr': True,
+                'type': '&&',
+                'operands': [
+                    {
+                        'is_expr': True,
+                        'type': '<=',
+                        'operands': [init_first, use_first],
+                        'op_pos': 0
+                    },
+                    {
+                        'is_expr': True,
+                        'type': '<=',
+                        'operands': [use_last, init_last],
+                        'op_pos': 0
+                    },
+                ],
+                'op_pos': 0
+            }
+
             asserts_ja = [
                 {
                     'type': 'exec',
                     'code': ASSERT_NAME_LUNA,
                     'id': ['_l0'],
                     'args': [
-                        {
-                            'is_expr': True,
-                            'type': '<=',
-                            'operands': [init_first, use_first],
-                            'op_pos': 0
-                        },
+                        bounds_check_ja,
                         {
                             'is_expr': True,
                             'type': 'sconst',
-                            'value': f'{ja_expression_to_str(init_first)} <= {ja_expression_to_str(use_first)} use {base_name})'
+                            'value': f'{ja_expression_to_str(bounds_check_ja)} (init bounds for {base_name})'
                         }
                     ],
                     'rules': [],
                     'begin': 0
                 },
+            ]
+            for assert_ja in asserts_ja:
+                body.append(assert_ja)
+                assertions_count += 1
+
+    return assertions_count, ja_with_assertions
+
+
+def generate_init_condition_assertions(ja: dict) -> tuple[int, dict]:
+    assertions_count = 0
+
+    ja_with_assertions = ja
+    ja_with_assertions[ASSERT_NAME_LUNA] = {
+        'args': [
+            {
+                'type': 'int'
+            },
+            {
+                'type': 'string'
+            }
+        ],
+        'code': ASSERT_NAME_C,
+        'code_type': 'default',
+        'rules': [],
+        'type': 'extern'
+    }
+
+    conditional_single_inits = find_conditional_single_inits(ja['main'], ja)
+    single_uses = find_single_uses(ja['main'], ja)
+
+    for name, use_bodies in single_uses.items():
+        if name not in conditional_single_inits:
+            continue
+
+        assert len(conditional_single_inits[name]) <= 1
+        _, single_init_condition = conditional_single_inits[name][0]
+        assert single_init_condition['type'] == 'if'
+
+        init_condition = single_init_condition['cond']
+
+        for body in use_bodies:
+            asserts_ja = [
                 {
                     'type': 'exec',
                     'code': ASSERT_NAME_LUNA,
                     'id': ['_l0'],
                     'args': [
-                        {
-                            'is_expr': True,
-                            'type': '<=',
-                            'operands': [use_last, init_last],
-                            'op_pos': 0
-                        },
+                        init_condition,
                         {
                             'is_expr': True,
                             'type': 'sconst',
-                            'value': f'{ja_expression_to_str(use_last)} <= {ja_expression_to_str(init_last)} use {base_name})'
+                            'value': f'{ja_expression_to_str(init_condition)} (condition to initialize {name})'
                         }
                     ],
                     'rules': [],
@@ -265,8 +355,9 @@ def generate_assertions(src_path: Path, ja: dict, ti: TextInfo) -> tuple[int, di
 
 
 def main() -> None:
+    assert len(sys.argv) > 1
     # TODO make this example work
-    luna_src_path: Final[Path] = Path() / 'tests' / '01_for' / '01_simple'
+    luna_src_path: Final[Path] = Path(sys.argv[1])
     luna_build_path: Final[Path] = luna_src_path / 'build'
 
     luna_ja_only_path = Path(__file__).parent / 'luna_ja_only' / 'luna'
@@ -290,12 +381,14 @@ def main() -> None:
         print(e.stderr.decode(), file=sys.stderr)
         sys.exit(1)
 
-    assertions_count, ja_with_assertions = generate_assertions(
-        src_path=luna_src_path,
+    loop_assertions_count, ja_with_assertions = generate_loop_assertions(
         ja=json.loads(luna_build_path.joinpath('program_foreign.ja').read_text(encoding='utf-8')),
-        ti=TextInfo(json.loads(luna_build_path.joinpath('preprocessed.fa.ti').read_text(encoding='utf-8'))),
+    )
+    condition_assertions_count, ja_with_assertions = generate_init_condition_assertions(
+        ja_with_assertions,
     )
 
+    assertions_count = loop_assertions_count + condition_assertions_count
     print(f'Generated {assertions_count} assertion(s).')
     if assertions_count <= 0:
         print('Program was not modified.')
