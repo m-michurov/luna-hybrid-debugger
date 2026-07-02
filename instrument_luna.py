@@ -6,7 +6,8 @@ import sys
 from pathlib import Path
 from typing import Final
 
-C_ASSERT_CPP_PATH: Final[Path] = Path(__file__).parent / '_c_generated_assert.cpp'
+from adapt_file_names import C_ASSERT_CPP_PATH
+from adapt_function_names import ASSERT_NAME_C, ASSERT_NAME_LUNA
 
 
 class TextInfo:
@@ -208,12 +209,6 @@ def find_single_uses(sub: dict, program: dict) -> dict[str, list[list]]:
                 result[ref] = result.get(ref, []) + [sub['body']]
 
     return result
-
-
-ASSERT_NAME_C: Final[str] = '_c_generated_assert'
-ASSERT_NAME_LUNA: Final[str] = '_generated_assert'
-
-ASSERT_IMPORT_JA: Final[str] = f'import {ASSERT_NAME_C}(int, string) as {ASSERT_NAME_LUNA};'
 
 
 # TODO handle init/use loops in subs - pass loop bounds as parameters if needed
