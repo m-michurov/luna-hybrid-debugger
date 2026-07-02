@@ -5,7 +5,7 @@ from typing import Final
 
 from clang import cindex
 
-from adapt_file_names import C_HASH_HEADER_PATH, C_ASSERT_HEADER_PATH
+from adapt_file_names import C_HASH_HEADER_PATH, C_ASSERT_HEADER_PATH, C_ASSERT_CPP_PATH
 from adapt_function_names import HASH_NAME_C, ASSERT_NAME_C
 
 cindex.Config.set_library_file("/usr/lib/llvm-18/lib/libclang.so")  # adjust path
@@ -122,9 +122,9 @@ def generate_hash_initialization(parameter_name: str) -> str:
     return f'\n        auto const {generate_hash_variable_name(parameter_name)} = {generate_hash_call(parameter_name)};\n'
 
 
-def generate_hash_check(parameter_name: str) -> str:
+def generate_hash_check(file: str, func: str, parameter_name: str) -> str:
     return f'\n        {ASSERT_NAME_C}({generate_hash_call(parameter_name)} == {generate_hash_variable_name(parameter_name)}, ' \
-           f'"Input parameter {parameter_name} changed");\n    '
+           f'"File {file}, function {func}: input parameter {parameter_name} changed");\n    '
 
 
 def main(cpp_path: Path) -> None:
@@ -173,10 +173,7 @@ def main(cpp_path: Path) -> None:
 
             assert_lines = []
             for p in input_params:
-                assert_lines.append(
-                    f'\n        assert({generate_hash_call(p.spelling)} == {generate_hash_variable_name(p.spelling)} '
-                    f'&& "Input parameter {p.spelling} changed");\n    '
-                )
+                assert_lines.append(generate_hash_check(cpp_path.name, func.spelling, p.spelling))
                 generated_hash_checks_count += 1
 
             edits.append(Edit(ret_pos, ''.join(assert_lines)))
@@ -184,7 +181,7 @@ def main(cpp_path: Path) -> None:
         # Insert at end of function (before closing '}')
         end_asserts = []
         for p in input_params:
-            end_asserts.append(generate_hash_check(p.spelling))
+            end_asserts.append(generate_hash_check(cpp_path.name, func.spelling, p.spelling))
             generated_hash_checks_count += 1
 
         edits.append(Edit(body_end - 1, ''.join(end_asserts)))
@@ -193,11 +190,13 @@ def main(cpp_path: Path) -> None:
         source = source[:edit.pos] + edit.text + source[edit.pos:]
 
     c_hash_header_path_dst = cpp_path.parent / C_HASH_HEADER_PATH.name
-    if not c_hash_header_path_dst:
-        shutil.copyfile(src=C_HASH_HEADER_PATH, dst=c_hash_header_path_dst)
+    shutil.copyfile(src=C_HASH_HEADER_PATH, dst=c_hash_header_path_dst)
+    shutil.copyfile(src=C_ASSERT_HEADER_PATH, dst=cpp_path.parent / C_ASSERT_HEADER_PATH.name)
+    shutil.copyfile(src=C_ASSERT_CPP_PATH, dst=cpp_path.parent / C_ASSERT_CPP_PATH.name)
 
     dst_cpp_path = cpp_path.with_name(f'{cpp_path.stem}_instrumented{cpp_path.suffix}')
     dst_cpp_path.write_text(source, encoding='utf-8')
+    cpp_path.rename(cpp_path.with_name(f'{cpp_path.name}.bak'))
 
     print(f'Generated {generated_hash_checks_count} hash checks.')
     print(f'Hash checks inserted into {dst_cpp_path.name}.')
