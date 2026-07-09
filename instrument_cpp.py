@@ -1,3 +1,4 @@
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -26,10 +27,15 @@ def get_source_text(start, end, source):
 
 
 DECLARED_INPUT_DF_PARAMETER_TYPE: Final[str] = 'const InputDF &'
+DECLARED_OUTPUT_DF_PARAMETER_TYPE: Final[str] = 'OutputDF &'
 
 
 def is_input_df_param(param: cindex.Cursor) -> bool:
     return get_declared_type(param) == DECLARED_INPUT_DF_PARAMETER_TYPE
+
+
+def is_output_df_param(param: cindex.Cursor) -> bool:
+    return get_declared_type(param) == DECLARED_OUTPUT_DF_PARAMETER_TYPE
 
 
 def collect_returns(node, returns):
@@ -127,6 +133,212 @@ def generate_hash_check(file: str, func: str, parameter_name: str) -> str:
            f'"File {file}, function {func}: input parameter {parameter_name} changed");\n    '
 
 
+def parse_generate_pragma(line):
+    """
+    Parse:
+
+        #pragma generate assert_kind(parameter)
+
+    Returns:
+
+        {
+            "assert_kind": "assert_kind",
+            "parameter": "parameter"
+        }
+
+    or None if it does not match.
+    """
+
+    m = re.match(
+        r'\s*#\s*pragma\s+adapt\s+(\w+)\s*\(\s*([^)]+)\s*\)',
+        line
+    )
+
+    if not m:
+        return None
+
+    return {
+        'kind': m.group(1),
+        'parameters': [it.strip() for it in m.group(2).strip().split(',')],
+    }
+
+
+def get_function_info(cursor):
+    """
+    Extract useful information from a FUNCTION_DECL.
+    """
+
+    body = None
+
+    for child in cursor.get_children():
+        if child.kind == cindex.CursorKind.COMPOUND_STMT:
+            body = child
+            break
+
+    params = []
+
+    for arg in cursor.get_arguments():
+        params.append({
+            "name": arg.spelling,
+            "type": arg.type.spelling,
+            "tokens": [
+                t.spelling for t in arg.get_tokens()
+            ]
+        })
+
+    return {
+        "cursor": cursor,
+        "name": cursor.spelling,
+
+        "location": {
+            "file": str(cursor.location.file),
+            "line": cursor.location.line,
+            "column": cursor.location.column,
+        },
+
+        "parameters": params,
+
+        # Cursor pointing at the body
+        "body_cursor": body,
+
+        # Source range of whole function
+        "extent": {
+            "start": cursor.extent.start.offset,
+            "end": cursor.extent.end.offset,
+        }
+    }
+
+
+def find_pragmas_before_line(lines, line_number):
+    """
+    Find consecutive #pragma generate lines immediately
+    before a function.
+
+    line_number is 1-based.
+    """
+
+    result = []
+
+    i = line_number - 2  # previous line (0-based)
+
+    while i >= 0:
+        # print(f'Checking line {line_number}: {lines[i]}')
+        pragma = parse_generate_pragma(lines[i])
+
+        if pragma:
+            result.insert(0, pragma)
+            i -= 1
+            continue
+
+        # stop at first non-pragma line
+        break
+
+    return result
+
+
+def find_functions_with_pragmas(lines: list[str], cursor: cindex.Cursor, file: str):
+    result = []
+
+    def visit(node):
+        # print(f'Visiting {node.kind}: {node.spelling}')
+        if node.location.file and str(node.location.file) != file:
+            return
+
+        if node.kind == cindex.CursorKind.FUNCTION_DECL:
+            pragmas = find_pragmas_before_line(
+                lines,
+                node.location.line
+            )
+
+            info = get_function_info(node)
+
+            if pragmas:
+                result.append({
+                    "pragmas": pragmas,
+                    "function": info
+                })
+
+        for child in node.get_children():
+            visit(child)
+
+    visit(cursor)
+
+    return result
+
+
+def apply_edits(edits: list[Edit], source: str) -> str:
+    for edit in sorted(edits, key=lambda it: it.pos, reverse=True):
+        source = source[:edit.pos] + edit.text + source[edit.pos:]
+
+    return source
+
+
+def main_pragmas(cpp_path: Path) -> None:
+    index = cindex.Index.create()
+    translation_unit = index.parse(cpp_path, args=[
+        '-std=c++17'
+    ])
+
+    source = cpp_path.read_text(encoding='utf-8')
+
+    results = find_functions_with_pragmas(source.splitlines(), translation_unit.cursor, file=str(cpp_path))
+    print(f'Found {len(results)} functions with pragmas in {cpp_path}.')
+
+    edits = [
+        Edit(pos=0, text=f'#include "{C_HASH_HEADER_PATH.name}"\n'),
+        Edit(pos=0, text=f'#include "{C_ASSERT_HEADER_PATH.name}"\n'),
+    ]
+
+    generated_type_checks_count = 0
+    generated_type_initializations_count = 0
+    for result in results:
+        func = result['function']['cursor']
+        body = function_body_extent(func)
+        if not body:
+            continue
+
+        body_start = get_source_offset(body.start)
+
+        input_params = [p for p in func.get_arguments() if is_input_df_param(p)]
+        input_param_names = [p.spelling for p in input_params]
+        output_params = [p for p in func.get_arguments() if is_output_df_param(p)]
+        output_param_names = [p.spelling for p in output_params]
+
+        for pragma in result['pragmas']:
+            if pragma['kind'] != 'user_type':
+                continue
+
+            parameter_name, user_type = pragma['parameters']
+            user_type_dbg_info_str_c = f'"adapt_user_type={user_type};"'
+            if parameter_name in input_param_names:
+                edits.append(Edit(
+                    pos=body_start+1,
+                    text=f'\n        {ASSERT_NAME_C}({parameter_name}.DBG_INFO.find({user_type_dbg_info_str_c}) != std::string::npos, '
+                         f'std::string("File {func.location.file}, function {func.spelling}: expected {parameter_name} type to be {user_type}, DBG_INFO=") + {parameter_name}.DBG_INFO);\n',
+                ))
+                generated_type_checks_count+=1
+
+            if parameter_name in output_param_names:
+                edits.append(Edit(
+                    pos=body_start + 1,
+                    text=f'\n        {parameter_name}.DBG_INFO = {user_type_dbg_info_str_c} + {parameter_name}.DBG_INFO;\n',
+                ))
+                generated_type_initializations_count += 1
+
+    source = apply_edits(edits, source)
+
+    shutil.copyfile(src=C_ASSERT_HEADER_PATH, dst=cpp_path.parent / C_ASSERT_HEADER_PATH.name)
+    shutil.copyfile(src=C_ASSERT_CPP_PATH, dst=cpp_path.parent / C_ASSERT_CPP_PATH.name)
+
+    dst_cpp_path = cpp_path.with_name(f'{cpp_path.stem}_instrumented{cpp_path.suffix}')
+    dst_cpp_path.write_text(source, encoding='utf-8')
+    cpp_path.rename(cpp_path.with_name(f'{cpp_path.name}.bak'))
+
+    print(f'Generated {generated_type_initializations_count} type initializations.')
+    print(f'Generated {generated_type_checks_count} type checks.')
+    print(f'Type checks inserted into {dst_cpp_path.name}.')
+
+
 def main(cpp_path: Path) -> None:
     index = cindex.Index.create()
     translation_unit = index.parse(cpp_path, args=[
@@ -186,8 +398,7 @@ def main(cpp_path: Path) -> None:
 
         edits.append(Edit(body_end - 1, ''.join(end_asserts)))
 
-    for edit in sorted(edits, key=lambda it: it.pos, reverse=True):
-        source = source[:edit.pos] + edit.text + source[edit.pos:]
+    source = apply_edits(edits, source)
 
     c_hash_header_path_dst = cpp_path.parent / C_HASH_HEADER_PATH.name
     shutil.copyfile(src=C_HASH_HEADER_PATH, dst=c_hash_header_path_dst)
@@ -207,4 +418,4 @@ if __name__ == '__main__':
         print('Usage: python instrument_cpp.py file.cpp')
         sys.exit(1)
 
-    main(Path(sys.argv[1]))
+    main_pragmas(Path(sys.argv[1]))
