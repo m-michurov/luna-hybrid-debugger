@@ -2,7 +2,7 @@
 
 #include <cstdint>
 
-static inline uint64_t _adapt_fnv1a64_hash(const void* data, std::size_t len)
+static inline uint64_t _adapt_hash(const void* data, std::size_t len)
 {
     const uint8_t* p = (const uint8_t*)data;
 

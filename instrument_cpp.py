@@ -1,6 +1,9 @@
+from __future__ import annotations
+
 import re
 import shutil
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -9,33 +12,161 @@ from clang import cindex
 from adapt_file_names import C_HASH_HEADER_PATH, C_ASSERT_HEADER_PATH, C_ASSERT_CPP_PATH
 from adapt_function_names import HASH_NAME_C, ASSERT_NAME_C
 
-cindex.Config.set_library_file("/usr/lib/llvm-18/lib/libclang.so")  # adjust path
+cindex.Config.set_library_file('/usr/lib/llvm-18/lib/libclang.so')  # adjust path
 
 
+@dataclass(frozen=True)
 class Edit:
-    def __init__(self, pos, text):
-        self.pos = pos
-        self.text = text
+    position: int
+    text: str
+
+
+class Pragma:
+    pass
+
+
+@dataclass(frozen=True)
+class PragmaUserType(Pragma):
+    argument_name: str
+    type_name: str
+
+
+class UnknownPragma(Exception):
+    def __init__(self, pragma_type: str) -> None:
+        self.pragma_type = pragma_type
+
+    def __str__(self) -> str:
+        return f'Unknown pragma: "{self.pragma_type}"'
+
+
+class InvalidPragmaSyntax(Exception):
+    def __str__(self) -> str:
+        return f'Invalid pragma syntax'
+
+
+class InvalidUserTypePragmaArgumentName(Exception):
+    def __init__(self, argument_name: str, function_name: str) -> None:
+        self.argument_name = argument_name
+        self.function_name = function_name
+
+    def __str__(self) -> str:
+        return f'Function "{self.function_name}" has no argument named "{self.argument_name}"'
+
+
+def try_parse_pragma(line: str) -> Pragma | None:
+    if not re.match(r'\s*#\s*pragma\s+adapt', line):
+        return None
+
+    match = re.match(
+        r'\s*#\s*pragma\s+adapt\s+(\w+)\s*\(\s*([^)]+)\s*\)',
+        line
+    )
+
+    if not match:
+        raise InvalidPragmaSyntax()
+
+    pragma_type = match.group(1)
+    pragma_arguments = [it.strip() for it in match.group(2).strip().split(',')]
+
+    match pragma_type, pragma_arguments:
+        case 'user_type', [argument_name, type_name]:
+            return PragmaUserType(argument_name=argument_name, type_name=type_name)
+        case _:
+            raise UnknownPragma(pragma_type)
+
+
+def find_pragmas_before_line(lines: list[str], line_number: int) -> list[Pragma]:
+    result = []
+
+    line_index = line_number - 2
+
+    while line_index >= 0:
+        pragma = try_parse_pragma(lines[line_index])
+        if not pragma:
+            break
+
+        result.insert(0, pragma)
+        line_index -= 1
+
+    return result
+
+
+@dataclass(frozen=True)
+class FunctionArgument:
+    name: str
+    type: str
+
+    @staticmethod
+    def from_cursor(cursor: cindex.Cursor) -> FunctionArgument:
+        return FunctionArgument(
+            name=cursor.spelling,
+            type=get_declared_type(cursor)
+        )
+
+
+@dataclass(frozen=True)
+class Statement:
+    extent: cindex.SourceRange
+
+
+@dataclass(frozen=True)
+class Function:
+    name: str
+    arguments: list[FunctionArgument]
+    is_extern_c: bool
+
+    location: cindex.SourceLocation
+
+    body: Statement | None
+
+    @staticmethod
+    def from_cursor(cursor: cindex.Cursor) -> Function:
+        body: Statement | None = None
+        for child in cursor.get_children():
+            if child.kind != cindex.CursorKind.COMPOUND_STMT:
+                continue
+
+            body = Statement(extent=child.extent)
+            break
+
+        return Function(
+            name=(cursor.spelling),
+            arguments=[FunctionArgument.from_cursor(arg) for arg in cursor.get_arguments()],
+            is_extern_c=is_extern_c(cursor),
+            location=cursor.location,
+            body=body
+        )
+
+
+def parse_function_pragmas(source_lines: list[str], function: Function) -> list[Pragma]:
+    pragmas = find_pragmas_before_line(lines=source_lines, line_number=function.location.line)
+    for pragma in pragmas:
+        match pragma:
+            case PragmaUserType(argument_name, _):
+                if not any(arg.name == argument_name for arg in function.arguments):
+                    raise InvalidUserTypePragmaArgumentName(
+                        argument_name=argument_name,
+                        function_name=function.name
+                    )
+            case _:
+                pass
+    return pragmas
 
 
 def get_source_offset(location):
     return location.offset
 
 
-def get_source_text(start, end, source):
-    return source[start:end]
-
-
-DECLARED_INPUT_DF_PARAMETER_TYPE: Final[str] = 'const InputDF &'
-DECLARED_OUTPUT_DF_PARAMETER_TYPE: Final[str] = 'OutputDF &'
+ARGUMENT_TYPE_INPUT_DF: Final[str] = 'const InputDF &'
+ARGUMENT_TYPE_OUTPUT_DF: Final[str] = 'OutputDF &'
 
 
 def is_input_df_param(param: cindex.Cursor) -> bool:
-    return get_declared_type(param) == DECLARED_INPUT_DF_PARAMETER_TYPE
+    return get_declared_type(param) == ARGUMENT_TYPE_INPUT_DF
 
 
 def is_output_df_param(param: cindex.Cursor) -> bool:
-    return get_declared_type(param) == DECLARED_OUTPUT_DF_PARAMETER_TYPE
+    return get_declared_type(param) == ARGUMENT_TYPE_OUTPUT_DF
 
 
 def collect_returns(node, returns):
@@ -72,11 +203,22 @@ def find_extern_c_functions(node: cindex.Cursor, file: str) -> list[cindex.Curso
     return result
 
 
-def function_body_extent(func):
-    for child in func.get_children():
-        if child.kind == cindex.CursorKind.COMPOUND_STMT:
-            return child.extent
-    return None
+def find_translation_unit_functions(
+        source_lines: list[str],
+        translation_unit: cindex.TranslationUnit
+) -> list[Function]:
+    def find_functions(node: cindex.Cursor) -> list[Function]:
+        result = []
+
+        if node.kind == cindex.CursorKind.FUNCTION_DECL:
+            result.append(Function.from_cursor(cursor=node))
+
+        for child in node.get_children():
+            result.extend(find_functions(child))
+
+        return result
+
+    return find_functions(translation_unit.cursor)
 
 
 def get_declared_type(param: cindex.Cursor) -> str:
@@ -209,33 +351,6 @@ def get_function_info(cursor):
     }
 
 
-def find_pragmas_before_line(lines, line_number):
-    """
-    Find consecutive #pragma generate lines immediately
-    before a function.
-
-    line_number is 1-based.
-    """
-
-    result = []
-
-    i = line_number - 2  # previous line (0-based)
-
-    while i >= 0:
-        # print(f'Checking line {line_number}: {lines[i]}')
-        pragma = parse_generate_pragma(lines[i])
-
-        if pragma:
-            result.insert(0, pragma)
-            i -= 1
-            continue
-
-        # stop at first non-pragma line
-        break
-
-    return result
-
-
 def find_functions_with_pragmas(lines: list[str], cursor: cindex.Cursor, file: str):
     result = []
 
@@ -267,76 +382,106 @@ def find_functions_with_pragmas(lines: list[str], cursor: cindex.Cursor, file: s
 
 
 def apply_edits(edits: list[Edit], source: str) -> str:
-    for edit in sorted(edits, key=lambda it: it.pos, reverse=True):
-        source = source[:edit.pos] + edit.text + source[edit.pos:]
+    def key(e: Edit) -> int:
+        return e.position
+
+    for edit in sorted(edits, key=key, reverse=True):
+        source = source[:edit.position] + edit.text + source[edit.position:]
 
     return source
 
 
-def main_pragmas(cpp_path: Path) -> None:
+def generate_user_type_string_cpp(type_name: str) -> str:
+    return f'"adapt_user_type={type_name};"'
+
+
+def generate_user_type_assignment_cpp(argument_name: str, type_name: str) -> str:
+    return f'\n        {argument_name}.DBG_INFO = {generate_user_type_string_cpp(type_name)} + {argument_name}.DBG_INFO;\n'
+
+
+def generate_user_type_check_cpp(function_name: str, file: str, argument_name: str, type_name: str) -> str:
+    return (f'\n        {ASSERT_NAME_C}('
+            f'{argument_name}.DBG_INFO.find({generate_user_type_string_cpp(type_name)}) != std::string::npos, '
+            f'"File {file}, function {function_name}: expected {argument_name} type to have user type {type_name}");\n')
+
+
+def instrument_cpp(cpp_path: Path, instrumented_path: Path) -> None:
     index = cindex.Index.create()
     translation_unit = index.parse(cpp_path, args=[
-        '-std=c++17'
+        '-std=c++11'
     ])
 
     source = cpp_path.read_text(encoding='utf-8')
+    source_lines = source.splitlines()
 
-    results = find_functions_with_pragmas(source.splitlines(), translation_unit.cursor, file=str(cpp_path))
-    print(f'Found {len(results)} functions with pragmas in {cpp_path}.')
+    functions = [
+        function
+        for function in find_translation_unit_functions(source_lines, translation_unit)
+        if str(function.location.file) == str(cpp_path)
+           and function.body is not None
+    ]
 
     edits = [
-        Edit(pos=0, text=f'#include "{C_HASH_HEADER_PATH.name}"\n'),
-        Edit(pos=0, text=f'#include "{C_ASSERT_HEADER_PATH.name}"\n'),
+        Edit(position=0, text=f'#include "{C_HASH_HEADER_PATH.name}"\n'),
+        Edit(position=0, text=f'#include "{C_ASSERT_HEADER_PATH.name}"\n'),
     ]
 
     generated_type_checks_count = 0
-    generated_type_initializations_count = 0
-    for result in results:
-        func = result['function']['cursor']
-        body = function_body_extent(func)
-        if not body:
-            continue
+    generated_type_assignments_count = 0
 
-        body_start = get_source_offset(body.start)
+    for function in functions:
+        body_start = function.body.extent.start.offset
 
-        input_params = [p for p in func.get_arguments() if is_input_df_param(p)]
-        input_param_names = [p.spelling for p in input_params]
-        output_params = [p for p in func.get_arguments() if is_output_df_param(p)]
-        output_param_names = [p.spelling for p in output_params]
+        input_args: dict[str, FunctionArgument] = {
+            arg.name: arg
+            for arg in function.arguments
+            if arg.type == ARGUMENT_TYPE_INPUT_DF
+        }
+        output_args: dict[str, FunctionArgument] = {
+            arg.name: arg
+            for arg in function.arguments
+            if arg.type == ARGUMENT_TYPE_OUTPUT_DF
+        }
 
-        for pragma in result['pragmas']:
-            if pragma['kind'] != 'user_type':
-                continue
-
-            parameter_name, user_type = pragma['parameters']
-            user_type_dbg_info_str_c = f'"adapt_user_type={user_type};"'
-            if parameter_name in input_param_names:
-                edits.append(Edit(
-                    pos=body_start+1,
-                    text=f'\n        {ASSERT_NAME_C}({parameter_name}.DBG_INFO.find({user_type_dbg_info_str_c}) != std::string::npos, '
-                         f'std::string("File {func.location.file}, function {func.spelling}: expected {parameter_name} type to be {user_type}, DBG_INFO=") + {parameter_name}.DBG_INFO);\n',
-                ))
-                generated_type_checks_count+=1
-
-            if parameter_name in output_param_names:
-                edits.append(Edit(
-                    pos=body_start + 1,
-                    text=f'\n        {parameter_name}.DBG_INFO = {user_type_dbg_info_str_c} + {parameter_name}.DBG_INFO;\n',
-                ))
-                generated_type_initializations_count += 1
+        for pragma in parse_function_pragmas(source_lines, function):
+            match pragma:
+                case PragmaUserType(argument_name, type_name):
+                    if argument_name in input_args:
+                        edits.append(Edit(
+                            position=body_start + 1,
+                            text=generate_user_type_check_cpp(
+                                file=str(function.location.file),
+                                function_name=function.name,
+                                argument_name=argument_name,
+                                type_name=type_name),
+                        ))
+                        generated_type_checks_count += 1
+                    if argument_name in output_args:
+                        edits.append(Edit(
+                            position=body_start + 1,
+                            text=generate_user_type_assignment_cpp(argument_name=argument_name, type_name=type_name),
+                        ))
+                        generated_type_assignments_count += 1
 
     source = apply_edits(edits, source)
 
-    shutil.copyfile(src=C_ASSERT_HEADER_PATH, dst=cpp_path.parent / C_ASSERT_HEADER_PATH.name)
-    shutil.copyfile(src=C_ASSERT_CPP_PATH, dst=cpp_path.parent / C_ASSERT_CPP_PATH.name)
+    if not instrumented_path.is_absolute():
+        instrumented_path = cpp_path.parent / instrumented_path
 
-    dst_cpp_path = cpp_path.with_name(f'{cpp_path.stem}_instrumented{cpp_path.suffix}')
+    if instrumented_path.exists() and not instrumented_path.is_dir():
+        raise NotADirectoryError()
+
+    instrumented_path.mkdir(parents=True, exist_ok=True)
+
+    shutil.copyfile(src=C_ASSERT_HEADER_PATH, dst=instrumented_path / C_ASSERT_HEADER_PATH.name)
+    shutil.copyfile(src=C_ASSERT_CPP_PATH, dst=instrumented_path / C_ASSERT_CPP_PATH.name)
+
+    dst_cpp_path = instrumented_path / cpp_path.name
     dst_cpp_path.write_text(source, encoding='utf-8')
-    cpp_path.rename(cpp_path.with_name(f'{cpp_path.name}.bak'))
 
-    print(f'Generated {generated_type_initializations_count} type initializations.')
+    print(f'Generated {generated_type_assignments_count} type initializations.')
     print(f'Generated {generated_type_checks_count} type checks.')
-    print(f'Type checks inserted into {dst_cpp_path.name}.')
+    print(f'Type checks inserted into {dst_cpp_path}.')
 
 
 def main(cpp_path: Path) -> None:
@@ -414,8 +559,8 @@ def main(cpp_path: Path) -> None:
 
 
 if __name__ == '__main__':
-    if len(sys.argv) != 2:
-        print('Usage: python instrument_cpp.py file.cpp')
+    if len(sys.argv) != 3:
+        print('Usage: python instrument_cpp.py file.cpp instrumented_path')
         sys.exit(1)
 
-    main_pragmas(Path(sys.argv[1]))
+    instrument_cpp(Path(sys.argv[1]), Path(sys.argv[2]))
