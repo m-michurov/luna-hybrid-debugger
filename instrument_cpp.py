@@ -9,7 +9,7 @@ from typing import Final
 
 from clang import cindex
 
-from adapt_file_names import C_HASH_HEADER_PATH, C_ASSERT_HEADER_PATH, C_ASSERT_CPP_PATH
+from adapt_file_paths import C_HASH_HEADER_PATH, C_ASSERT_HEADER_PATH, C_ASSERT_CPP_PATH
 from adapt_function_names import HASH_NAME_C, ASSERT_NAME_C
 
 cindex.Config.set_library_file('/usr/lib/llvm-18/lib/libclang.so')  # adjust path
@@ -19,6 +19,13 @@ cindex.Config.set_library_file('/usr/lib/llvm-18/lib/libclang.so')  # adjust pat
 class Edit:
     position: int
     text: str
+
+    @staticmethod
+    def from_lines(position: int, lines: list[str], indent: int | str) -> Edit:
+        if type(indent) is int:
+            indent = ' ' * indent
+
+        return Edit(position=position, text=f'\n{indent}'.join(['', *lines]) + '\n')
 
 
 class Pragma:
@@ -100,7 +107,7 @@ class FunctionArgument:
     def from_cursor(cursor: cindex.Cursor) -> FunctionArgument:
         return FunctionArgument(
             name=cursor.spelling,
-            type=get_declared_type(cursor)
+            type=get_declared_argument_type(cursor)
         )
 
 
@@ -130,9 +137,9 @@ class Function:
             break
 
         return Function(
-            name=(cursor.spelling),
+            name=cursor.spelling,
             arguments=[FunctionArgument.from_cursor(arg) for arg in cursor.get_arguments()],
-            is_extern_c=is_extern_c(cursor),
+            is_extern_c=is_function_extern_c(cursor),
             location=cursor.location,
             body=body
         )
@@ -153,20 +160,8 @@ def parse_function_pragmas(source_lines: list[str], function: Function) -> list[
     return pragmas
 
 
-def get_source_offset(location):
-    return location.offset
-
-
 ARGUMENT_TYPE_INPUT_DF: Final[str] = 'const InputDF &'
 ARGUMENT_TYPE_OUTPUT_DF: Final[str] = 'OutputDF &'
-
-
-def is_input_df_param(param: cindex.Cursor) -> bool:
-    return get_declared_type(param) == ARGUMENT_TYPE_INPUT_DF
-
-
-def is_output_df_param(param: cindex.Cursor) -> bool:
-    return get_declared_type(param) == ARGUMENT_TYPE_OUTPUT_DF
 
 
 def collect_returns(node, returns):
@@ -176,7 +171,7 @@ def collect_returns(node, returns):
         collect_returns(child, returns)
 
 
-def is_extern_c(cursor: cindex.Cursor) -> bool:
+def is_function_extern_c(cursor: cindex.Cursor) -> bool:
     # TODO In libclang, mangled_name often equals spelling for extern "C"
     if cursor.kind != cindex.CursorKind.FUNCTION_DECL:
         return False
@@ -191,22 +186,7 @@ def is_extern_c(cursor: cindex.Cursor) -> bool:
     return False
 
 
-def find_extern_c_functions(node: cindex.Cursor, file: str) -> list[cindex.Cursor]:
-    result = []
-
-    if str(node.location.file) == file and node.kind == cindex.CursorKind.FUNCTION_DECL and is_extern_c(node):
-        result.append(node)
-
-    for child in node.get_children():
-        result.extend(find_extern_c_functions(child, file))
-
-    return result
-
-
-def find_translation_unit_functions(
-        source_lines: list[str],
-        translation_unit: cindex.TranslationUnit
-) -> list[Function]:
+def find_translation_unit_functions(translation_unit: cindex.TranslationUnit) -> list[Function]:
     def find_functions(node: cindex.Cursor) -> list[Function]:
         result = []
 
@@ -221,8 +201,8 @@ def find_translation_unit_functions(
     return find_functions(translation_unit.cursor)
 
 
-def get_declared_type(param: cindex.Cursor) -> str:
-    tokens = list(param.get_tokens())
+def get_declared_argument_type(cursor: cindex.Cursor) -> str:
+    tokens = list(cursor.get_tokens())
 
     # drop parameter name (last token in most cases)
     if not tokens:
@@ -258,130 +238,25 @@ def get_declared_type(param: cindex.Cursor) -> str:
     return ' '.join(result.split())
 
 
-def generate_hash_call(parameter_name: str) -> str:
+def generate_hash_call_cpp(parameter_name: str) -> str:
     return f'{HASH_NAME_C}({parameter_name}.get_data(), {parameter_name}.get_size())'
 
 
-def generate_hash_variable_name(parameter_name: str) -> str:
-    return f'__adapt_generated_hash_{parameter_name}'
+def generate_hash_variable_name_cpp(parameter_name: str) -> str:
+    return f'__adapt_hash_{parameter_name}'
 
 
-def generate_hash_initialization(parameter_name: str) -> str:
-    return f'\n        auto const {generate_hash_variable_name(parameter_name)} = {generate_hash_call(parameter_name)};\n'
+def generate_hash_initialization_cpp(argument_name: str) -> str:
+    return f'auto const {generate_hash_variable_name_cpp(argument_name)} = {generate_hash_call_cpp(argument_name)};'
 
 
-def generate_hash_check(file: str, func: str, parameter_name: str) -> str:
-    return f'\n        {ASSERT_NAME_C}({generate_hash_call(parameter_name)} == {generate_hash_variable_name(parameter_name)}, ' \
-           f'"File {file}, function {func}: input parameter {parameter_name} changed");\n    '
+def generate_hash_check_cpp(file: str, function_name: str, argument_name: str) -> str:
+    return (
+        f'{ASSERT_NAME_C}({generate_hash_call_cpp(argument_name)} == {generate_hash_variable_name_cpp(argument_name)}, '
+        f'"File {file}, function {function_name}: input parameter {argument_name} changed");')
 
 
-def parse_generate_pragma(line):
-    """
-    Parse:
-
-        #pragma generate assert_kind(parameter)
-
-    Returns:
-
-        {
-            "assert_kind": "assert_kind",
-            "parameter": "parameter"
-        }
-
-    or None if it does not match.
-    """
-
-    m = re.match(
-        r'\s*#\s*pragma\s+adapt\s+(\w+)\s*\(\s*([^)]+)\s*\)',
-        line
-    )
-
-    if not m:
-        return None
-
-    return {
-        'kind': m.group(1),
-        'parameters': [it.strip() for it in m.group(2).strip().split(',')],
-    }
-
-
-def get_function_info(cursor):
-    """
-    Extract useful information from a FUNCTION_DECL.
-    """
-
-    body = None
-
-    for child in cursor.get_children():
-        if child.kind == cindex.CursorKind.COMPOUND_STMT:
-            body = child
-            break
-
-    params = []
-
-    for arg in cursor.get_arguments():
-        params.append({
-            "name": arg.spelling,
-            "type": arg.type.spelling,
-            "tokens": [
-                t.spelling for t in arg.get_tokens()
-            ]
-        })
-
-    return {
-        "cursor": cursor,
-        "name": cursor.spelling,
-
-        "location": {
-            "file": str(cursor.location.file),
-            "line": cursor.location.line,
-            "column": cursor.location.column,
-        },
-
-        "parameters": params,
-
-        # Cursor pointing at the body
-        "body_cursor": body,
-
-        # Source range of whole function
-        "extent": {
-            "start": cursor.extent.start.offset,
-            "end": cursor.extent.end.offset,
-        }
-    }
-
-
-def find_functions_with_pragmas(lines: list[str], cursor: cindex.Cursor, file: str):
-    result = []
-
-    def visit(node):
-        # print(f'Visiting {node.kind}: {node.spelling}')
-        if node.location.file and str(node.location.file) != file:
-            return
-
-        if node.kind == cindex.CursorKind.FUNCTION_DECL:
-            pragmas = find_pragmas_before_line(
-                lines,
-                node.location.line
-            )
-
-            info = get_function_info(node)
-
-            if pragmas:
-                result.append({
-                    "pragmas": pragmas,
-                    "function": info
-                })
-
-        for child in node.get_children():
-            visit(child)
-
-    visit(cursor)
-
-    return result
-
-
-def apply_edits(edits: list[Edit], source: str) -> str:
+def apply_edits(source: str, edits: list[Edit]) -> str:
     def key(e: Edit) -> int:
         return e.position
 
@@ -396,13 +271,30 @@ def generate_user_type_string_cpp(type_name: str) -> str:
 
 
 def generate_user_type_assignment_cpp(argument_name: str, type_name: str) -> str:
-    return f'\n        {argument_name}.DBG_INFO = {generate_user_type_string_cpp(type_name)} + {argument_name}.DBG_INFO;\n'
+    return f'{argument_name}.DBG_INFO = {generate_user_type_string_cpp(type_name)} + {argument_name}.DBG_INFO;'
 
 
 def generate_user_type_check_cpp(function_name: str, file: str, argument_name: str, type_name: str) -> str:
-    return (f'\n        {ASSERT_NAME_C}('
+    return (f'{ASSERT_NAME_C}('
             f'{argument_name}.DBG_INFO.find({generate_user_type_string_cpp(type_name)}) != std::string::npos, '
-            f'"File {file}, function {function_name}: expected {argument_name} type to have user type {type_name}");\n')
+            f'"File {file}, function {function_name}: expected {argument_name} type to have user type {type_name}");')
+
+
+def get_source_indentation(source: str, location: cindex.SourceLocation) -> int:
+    indent = 0
+    char_index = location.offset - 2
+    while char_index >= 0:
+        match source[char_index]:
+            case ' ':
+                indent += 1
+            case '\t':
+                indent += 4
+            case _:
+                break
+
+        char_index -= 1
+
+    return indent
 
 
 def instrument_cpp(cpp_path: Path, instrumented_path: Path) -> None:
@@ -416,7 +308,7 @@ def instrument_cpp(cpp_path: Path, instrumented_path: Path) -> None:
 
     functions = [
         function
-        for function in find_translation_unit_functions(source_lines, translation_unit)
+        for function in find_translation_unit_functions(translation_unit)
         if str(function.location.file) == str(cpp_path)
            and function.body is not None
     ]
@@ -428,9 +320,18 @@ def instrument_cpp(cpp_path: Path, instrumented_path: Path) -> None:
 
     generated_type_checks_count = 0
     generated_type_assignments_count = 0
+    generated_hash_checks_count = 0
+    generated_hash_initializations_count = 0
 
     for function in functions:
+        closing_bracket_indent = get_source_indentation(source, function.body.extent.end)
+        generated_indent = 4 + closing_bracket_indent
+
+        file = str(function.location.file)
+
+        # Pragma-controlled code generation
         body_start = function.body.extent.start.offset
+        body_end = function.body.extent.end.offset - closing_bracket_indent
 
         input_args: dict[str, FunctionArgument] = {
             arg.name: arg
@@ -443,124 +344,86 @@ def instrument_cpp(cpp_path: Path, instrumented_path: Path) -> None:
             if arg.type == ARGUMENT_TYPE_OUTPUT_DF
         }
 
+        type_checks = []
+        type_assignments = []
+
         for pragma in parse_function_pragmas(source_lines, function):
             match pragma:
                 case PragmaUserType(argument_name, type_name):
                     if argument_name in input_args:
-                        edits.append(Edit(
-                            position=body_start + 1,
-                            text=generate_user_type_check_cpp(
-                                file=str(function.location.file),
-                                function_name=function.name,
-                                argument_name=argument_name,
-                                type_name=type_name),
+                        type_checks.append(generate_user_type_check_cpp(
+                            file=file,
+                            function_name=function.name,
+                            argument_name=argument_name,
+                            type_name=type_name
                         ))
-                        generated_type_checks_count += 1
                     if argument_name in output_args:
-                        edits.append(Edit(
-                            position=body_start + 1,
-                            text=generate_user_type_assignment_cpp(argument_name=argument_name, type_name=type_name),
+                        type_assignments.append(generate_user_type_assignment_cpp(
+                            argument_name=argument_name,
+                            type_name=type_name
                         ))
-                        generated_type_assignments_count += 1
 
-    source = apply_edits(edits, source)
+        generated_type_checks_count += len(type_checks)
+        generated_type_assignments_count += len(type_assignments)
 
-    if not instrumented_path.is_absolute():
-        instrumented_path = cpp_path.parent / instrumented_path
+        edits.append(Edit.from_lines(position=body_start + 1, lines=type_checks, indent=generated_indent))
+        edits.append(Edit.from_lines(position=body_start + 1, lines=type_assignments, indent=generated_indent))
 
-    if instrumented_path.exists() and not instrumented_path.is_dir():
-        raise NotADirectoryError()
+        # Unconditional hash checks
+        hash_initializations = []
+        hash_checks = []
+        for argument_name in input_args:
+            hash_initializations.append(generate_hash_initialization_cpp(argument_name))
+            hash_checks.append(generate_hash_check_cpp(
+                file=file,
+                function_name=function.name,
+                argument_name=argument_name
+            ))
 
-    instrumented_path.mkdir(parents=True, exist_ok=True)
+        generated_hash_checks_count += len(hash_checks)
+        generated_hash_initializations_count += len(hash_initializations)
 
-    shutil.copyfile(src=C_ASSERT_HEADER_PATH, dst=instrumented_path / C_ASSERT_HEADER_PATH.name)
-    shutil.copyfile(src=C_ASSERT_CPP_PATH, dst=instrumented_path / C_ASSERT_CPP_PATH.name)
+        edits.append(Edit.from_lines(position=body_start + 1, lines=hash_initializations, indent=generated_indent))
+        edits.append(Edit.from_lines(position=body_end - 1, lines=hash_checks, indent=generated_indent))
+
+    source = apply_edits(source, edits)
 
     dst_cpp_path = instrumented_path / cpp_path.name
     dst_cpp_path.write_text(source, encoding='utf-8')
 
     print(f'Generated {generated_type_assignments_count} type initializations.')
     print(f'Generated {generated_type_checks_count} type checks.')
-    print(f'Type checks inserted into {dst_cpp_path}.')
-
-
-def main(cpp_path: Path) -> None:
-    index = cindex.Index.create()
-    translation_unit = index.parse(cpp_path, args=[
-        '-std=c++17'
-    ])
-
-    source = cpp_path.read_text(encoding='utf-8')
-
-    edits = [
-        Edit(pos=0, text=f'#include "{C_HASH_HEADER_PATH.name}"\n'),
-        Edit(pos=0, text=f'#include "{C_ASSERT_HEADER_PATH.name}"\n'),
-    ]
-
-    funcs = find_extern_c_functions(translation_unit.cursor, file=str(cpp_path))
-
-    generated_hash_checks_count = 0
-
-    for func in funcs:
-        input_params = [p for p in func.get_arguments() if is_input_df_param(p)]
-        if not input_params:
-            continue
-
-        body = function_body_extent(func)
-        if not body:
-            continue
-
-        body_start = get_source_offset(body.start)
-        body_end = get_source_offset(body.end)
-
-        # Insert hashes after '{'
-        insert_pos = body_start + 1
-        hash_lines = []
-        for p in input_params:
-            hash_lines.append(generate_hash_initialization(p.spelling))
-
-        edits.append(Edit(insert_pos, "".join(hash_lines)))
-
-        # Insert assertions before returns
-        returns = []
-        collect_returns(func, returns)
-
-        for ret in returns:
-            ret_pos = get_source_offset(ret.extent.start)
-
-            assert_lines = []
-            for p in input_params:
-                assert_lines.append(generate_hash_check(cpp_path.name, func.spelling, p.spelling))
-                generated_hash_checks_count += 1
-
-            edits.append(Edit(ret_pos, ''.join(assert_lines)))
-
-        # Insert at end of function (before closing '}')
-        end_asserts = []
-        for p in input_params:
-            end_asserts.append(generate_hash_check(cpp_path.name, func.spelling, p.spelling))
-            generated_hash_checks_count += 1
-
-        edits.append(Edit(body_end - 1, ''.join(end_asserts)))
-
-    source = apply_edits(edits, source)
-
-    c_hash_header_path_dst = cpp_path.parent / C_HASH_HEADER_PATH.name
-    shutil.copyfile(src=C_HASH_HEADER_PATH, dst=c_hash_header_path_dst)
-    shutil.copyfile(src=C_ASSERT_HEADER_PATH, dst=cpp_path.parent / C_ASSERT_HEADER_PATH.name)
-    shutil.copyfile(src=C_ASSERT_CPP_PATH, dst=cpp_path.parent / C_ASSERT_CPP_PATH.name)
-
-    dst_cpp_path = cpp_path.with_name(f'{cpp_path.stem}_instrumented{cpp_path.suffix}')
-    dst_cpp_path.write_text(source, encoding='utf-8')
-    cpp_path.rename(cpp_path.with_name(f'{cpp_path.name}.bak'))
-
+    print(f'Generated {generated_hash_initializations_count} hash initializations.')
     print(f'Generated {generated_hash_checks_count} hash checks.')
-    print(f'Hash checks inserted into {dst_cpp_path.name}.')
+    print(f'See {dst_cpp_path}.')
 
 
-if __name__ == '__main__':
+def main() -> None:
     if len(sys.argv) != 3:
         print('Usage: python instrument_cpp.py file.cpp instrumented_path')
         sys.exit(1)
 
-    instrument_cpp(Path(sys.argv[1]), Path(sys.argv[2]))
+    cpp_path = Path(sys.argv[1])
+
+    instrumented_path = Path(sys.argv[2])
+    if not instrumented_path.is_absolute():
+        instrumented_path = cpp_path.parent / instrumented_path
+    if instrumented_path.exists() and not instrumented_path.is_dir():
+        raise NotADirectoryError()
+    instrumented_path.mkdir(parents=True, exist_ok=True)
+
+    project_folder = cpp_path.parent
+    shutil.copytree(
+        src=project_folder,
+        dst=instrumented_path,
+        ignore=lambda _1, _2: [instrumented_path.name],
+        dirs_exist_ok=True
+    )
+    for path in (C_HASH_HEADER_PATH, C_ASSERT_HEADER_PATH, C_ASSERT_CPP_PATH):
+        shutil.copyfile(src=path, dst=instrumented_path / path.name)
+
+    instrument_cpp(cpp_path, instrumented_path)
+
+
+if __name__ == '__main__':
+    main()

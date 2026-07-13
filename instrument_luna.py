@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 from typing import Final
 
-from adapt_file_names import C_ASSERT_CPP_PATH
+from adapt_file_paths import C_ASSERT_CPP_PATH
 from adapt_function_names import ASSERT_NAME_C, ASSERT_NAME_LUNA
 
 
