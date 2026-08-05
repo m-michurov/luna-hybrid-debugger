@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 import dataclasses
+import json
 import re
 import shutil
-import sys
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Final
+from typing import Final, TypeAlias
 
+import click
 from clang import cindex
 
 from adapt_file_paths import C_HASH_HEADER_PATH, C_ASSERT_HEADER_PATH, C_ASSERT_CPP_PATH
@@ -83,6 +84,15 @@ class InvalidUserTypePragmaArgumentName(Exception):
 
     def __str__(self) -> str:
         return f'Function "{self.function_name}" has no argument named "{self.argument_name}"'
+
+
+class UserTypeRedefinition(Exception):
+    def __init__(self, argument_name: str, function_name: str) -> None:
+        self.argument_name = argument_name
+        self.function_name = function_name
+
+    def __str__(self) -> str:
+        return f'Function "{self.function_name}" cannot have multiple user types declared for argument "{self.argument_name}"'
 
 
 class InvalidSignature(Exception):
@@ -196,6 +206,20 @@ class Function:
         )
 
 
+def input_output_args(function: Function) -> tuple[dict[str, FunctionArgument], dict[str, FunctionArgument]]:
+    input_args: dict[str, FunctionArgument] = {
+        arg.name: arg
+        for arg in function.arguments
+        if arg.type == ARGUMENT_TYPE_INPUT_DF
+    }
+    output_args: dict[str, FunctionArgument] = {
+        arg.name: arg
+        for arg in function.arguments
+        if arg.type == ARGUMENT_TYPE_OUTPUT_DF
+    }
+    return input_args, output_args
+
+
 def parse_function_pragmas(source_lines: list[str], function: Function) -> list[Pragma]:
     pragmas = find_pragmas_before_line(lines=source_lines, line_number=function.location.line)
 
@@ -208,6 +232,8 @@ def parse_function_pragmas(source_lines: list[str], function: Function) -> list[
                         argument_name=argument_name,
                         function_name=function.name
                     )
+                if sum(1 for arg in function.arguments if arg.name == argument_name) > 1:
+                    raise InvalidPragmaSyntax()
             case PragmaSerializedSize(type_name):
                 if len(function.arguments) == 1 and function.arguments[0].type == type_name:
                     continue
@@ -426,7 +452,97 @@ def get_function_with_pragma(
     return None
 
 
-def instrument_cpp(cpp_path: Path, instrumented_path: Path) -> None:
+def get_user_type(pragmas: list[Pragma], argument_name: str) -> str | None:
+    for pragma in pragmas:
+        match pragma:
+            case PragmaUserType(some_argument_name, type_name):
+                if argument_name != some_argument_name:
+                    continue
+
+                return type_name
+            case _:
+                continue
+
+    return None
+
+
+def find_function_by_name(functions: list[Function], name: str) -> Function:
+    for function in functions:
+        if function.name == name:
+            return function
+
+    raise ValueError(f'Function {name} does not exist')
+
+
+def find_possible_argument_types(
+        function: Function,
+        argument_name: str,
+        functions: list[Function],
+        pragmas: dict[Function, list[Pragma]],
+        data_dependencies: dict[str, dict[str, list[ArgumentDataDependency]]],
+) -> set[str]:
+    if function.name not in data_dependencies or argument_name not in data_dependencies[function.name]:
+        return set()
+
+    types = set()
+
+    for other_function_name, other_argument_name in data_dependencies[function.name][argument_name]:
+        other_function = find_function_by_name(functions, other_function_name)
+        _, output_args = input_output_args(other_function)
+        other_argument = output_args[other_argument_name]
+
+        if other_argument_user_type := get_user_type(pragmas[other_function], other_argument.name):
+            types.add(other_argument_user_type)
+
+    return types
+
+
+def is_type_check_redundant(
+        function: Function,
+        argument_name: str,
+        functions: list[Function],
+        pragmas: dict[Function, list[Pragma]],
+        data_dependencies: dict[str, dict[str, list[ArgumentDataDependency]]],
+) -> bool:
+    possible_types = find_possible_argument_types(function, argument_name, functions, pragmas, data_dependencies)
+    required_type = get_user_type(pragmas[function], argument_name)
+
+    return required_type is not None and {required_type} == possible_types
+
+
+ArgumentDataDependency: TypeAlias = tuple[str, str]
+
+
+def load_data_dependencies(path: Path, functions: list[Function]) -> dict[str, dict[str, list[ArgumentDataDependency]]]:
+    result: dict[str, dict[str, list[ArgumentDataDependency]]] = {}
+
+    for function_name, data_dependencies in json.loads(path.read_text(encoding='utf-8')).items():
+        result[function_name] = {}
+
+        function = find_function_by_name(functions, function_name)
+
+        for argument_index_str, argument_data_dependencies in data_dependencies.items():
+            argument_index = int(argument_index_str)
+            argument_name = function.arguments[argument_index].name
+
+            result[function_name][argument_name] = []
+
+            for other_function_name, other_argument_index_str in argument_data_dependencies:
+                other_function = find_function_by_name(functions, other_function_name)
+
+                other_argument_index = int(other_argument_index_str)
+                other_argument_name = other_function.arguments[other_argument_index].name
+
+                result[function_name][argument_name].append((other_function_name, other_argument_name))
+
+    return result
+
+
+def instrument_cpp(
+        cpp_path: Path,
+        instrumented_path: Path,
+        data_dependencies_path: Path,
+) -> None:
     index = cindex.Index.create()
     translation_unit = index.parse(cpp_path, args=[
         '-std=c++11'
@@ -442,6 +558,8 @@ def instrument_cpp(cpp_path: Path, instrumented_path: Path) -> None:
            and function.body is not None
     ]
 
+    data_dependencies = load_data_dependencies(data_dependencies_path, functions)
+
     edits = [
         Edit(position=0, text=f'#include <cstdint>\n'),
         Edit(position=0, text=f'#include <cstddef>\n'),
@@ -451,6 +569,7 @@ def instrument_cpp(cpp_path: Path, instrumented_path: Path) -> None:
     ]
 
     generated_type_checks_count = 0
+    skipped_redundant_type_checks_count = 0
     generated_type_assignments_count = 0
     generated_hash_checks_count = 0
     generated_hash_initializations_count = 0
@@ -471,16 +590,7 @@ def instrument_cpp(cpp_path: Path, instrumented_path: Path) -> None:
         body_start = function.body.extent.start.offset
         body_end = function.body.extent.end.offset - closing_bracket_indent
 
-        input_args: dict[str, FunctionArgument] = {
-            arg.name: arg
-            for arg in function.arguments
-            if arg.type == ARGUMENT_TYPE_INPUT_DF
-        }
-        output_args: dict[str, FunctionArgument] = {
-            arg.name: arg
-            for arg in function.arguments
-            if arg.type == ARGUMENT_TYPE_OUTPUT_DF
-        }
+        input_args, output_args = input_output_args(function)
 
         type_checks = []
         type_assignments = []
@@ -490,6 +600,16 @@ def instrument_cpp(cpp_path: Path, instrumented_path: Path) -> None:
                 # User type assertions
                 case PragmaUserType(argument_name, type_name):
                     if argument_name in input_args:
+                        if is_type_check_redundant(
+                                function,
+                                argument_name=argument_name,
+                                functions=functions,
+                                pragmas=pragmas,
+                                data_dependencies=data_dependencies,
+                        ):
+                            skipped_redundant_type_checks_count += 1
+                            continue
+
                         type_checks.append(generate_user_type_check_cpp(
                             file=file,
                             function_name=function.name,
@@ -588,7 +708,7 @@ def instrument_cpp(cpp_path: Path, instrumented_path: Path) -> None:
     dst_cpp_path.write_text(source, encoding='utf-8')
 
     print(f'Generated {generated_type_assignments_count} type initializations.')
-    print(f'Generated {generated_type_checks_count} type checks.')
+    print(f'Generated {generated_type_checks_count} type checks (skipped {skipped_redundant_type_checks_count} redundant checks).')
     print(f'Generated {generated_hash_initializations_count} hash initializations.')
     print(f'Generated {generated_hash_checks_count} hash checks.')
     print(f'Generated {generated_deserialization_checks_count} deserialization checks.')
@@ -598,36 +718,64 @@ def instrument_cpp(cpp_path: Path, instrumented_path: Path) -> None:
         print(f'Type checks generated, debug mode (luna -g) required to run instrumented program.')
 
 
-def main() -> None:
-    match sys.argv:
-        case [_, cpp_path_str, instrumented_path_str]:
-            pass
-        case [_, cpp_path_str]:
-            instrumented_path_str = 'instrumented'
-        case _:
-            print('Usage: python instrument_cpp.py file.cpp instrumented_path')
-            sys.exit(1)
-
-    cpp_path = Path(cpp_path_str)
-    instrumented_path = Path(instrumented_path_str)
-
-    if not instrumented_path.is_absolute():
-        instrumented_path = cpp_path.parent / instrumented_path
-    if instrumented_path.exists() and not instrumented_path.is_dir():
+@click.command()
+@click.argument(
+    'cpp-path',
+    nargs=1,
+    type=click.Path(
+        dir_okay=False,
+        resolve_path=True,
+        path_type=Path,
+    )
+)
+@click.option(
+    '--output-dir',
+    required=False,
+    show_default=True,
+    default=Path('instrumented'),
+    help='Directory for program output.',
+    type=click.Path(
+        file_okay=False,
+        resolve_path=False,
+        path_type=Path,
+    )
+)
+@click.option(
+    '--atomic-ddg',
+    required=False,
+    show_default=True,
+    default=None,
+    help='A JSON file containing information about data dependencies between atomic CF arguments.',
+    type=click.Path(
+        dir_okay=False,
+        resolve_path=False,
+        path_type=Path,
+    )
+)
+def main(
+        cpp_path: Path,
+        output_dir: Path,
+        atomic_ddg: Path | None = None
+) -> None:
+    if not output_dir.is_absolute():
+        output_dir = cpp_path.parent / output_dir
+    if atomic_ddg is not None and not atomic_ddg.is_absolute():
+        atomic_ddg = cpp_path.parent / atomic_ddg
+    if output_dir.exists() and not output_dir.is_dir():
         raise NotADirectoryError()
-    instrumented_path.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
 
     project_folder = cpp_path.parent
     shutil.copytree(
         src=project_folder,
-        dst=instrumented_path,
-        ignore=lambda _1, _2: [instrumented_path.name],
+        dst=output_dir,
+        ignore=lambda _1, _2: [output_dir.name],
         dirs_exist_ok=True
     )
     for path in (C_HASH_HEADER_PATH, C_ASSERT_HEADER_PATH, C_ASSERT_CPP_PATH):
-        shutil.copyfile(src=path, dst=instrumented_path / path.name)
+        shutil.copyfile(src=path, dst=output_dir / path.name)
 
-    instrument_cpp(cpp_path, instrumented_path)
+    instrument_cpp(cpp_path, output_dir, atomic_ddg)
 
 
 if __name__ == '__main__':
