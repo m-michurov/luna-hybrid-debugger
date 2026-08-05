@@ -443,7 +443,8 @@ extern "C"
         }
     }
 
-#pragma adapt user_type(edge, Edge)
+#pragma adapt user_type(edge, Subgrid)
+#pragma adapt user_type(copy, Edge)
     void copy_edge(const InputDF &edge, OutputDF &copy)
     {
         memcpy(copy.create(edge.getSize()), edge.get_data(), edge.get_size());
