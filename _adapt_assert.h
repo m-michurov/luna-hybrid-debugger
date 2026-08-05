@@ -3,5 +3,5 @@
 #include <string>
 
 extern "C" {
-    void _adapt_assert(int condition, std::string const &condition_string);
+    void _adapt_assert(int condition, char const *condition_string);
 }
