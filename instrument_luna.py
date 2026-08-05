@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 from typing import Final
 
+import click
+
 from adapt_file_paths import C_ASSERT_CPP_PATH
 from adapt_function_names import ASSERT_NAME_C, ASSERT_NAME_LUNA
 
@@ -58,7 +60,7 @@ def ja_arith_expression_to_str(expr: dict) -> str:
             operand = ja_expression_to_str(expr['operands'][0])
             return f'{op}{operand}'
         case unsupported_type:
-            assert False, unsupported_type
+            raise NotImplementedError(unsupported_type)
 
 
 def ja_expression_to_str(expr: dict) -> str:
@@ -72,7 +74,7 @@ def ja_expression_to_str(expr: dict) -> str:
         case op if op in JA_BINARY_OPERATORS or op in JA_UNARY_OPERATORS:
             return ja_arith_expression_to_str(expr)
         case unsupported_type:
-            assert False, unsupported_type
+            raise NotImplementedError(unsupported_type)
 
 
 def print_statement(statement: dict, indent: int = 0) -> None:
@@ -349,26 +351,65 @@ def generate_init_condition_assertions(ja: dict) -> tuple[int, dict]:
     return assertions_count, ja_with_assertions
 
 
-def main() -> None:
-    assert len(sys.argv) > 1
-    # TODO make this example work
-    luna_src_path: Final[Path] = Path(sys.argv[1])
-    luna_build_path: Final[Path] = luna_src_path / 'build'
+@click.command()
+@click.argument(
+    'project-path',
+    nargs=1,
+    type=click.Path(
+        dir_okay=True,
+        file_okay=False,
+        resolve_path=True,
+        path_type=Path,
+    )
+)
+@click.option(
+    '--build-dir',
+    required=False,
+    show_default=True,
+    default=Path('build'),
+    help='Directory for build files.',
+    type=click.Path(
+        file_okay=False,
+        resolve_path=False,
+        path_type=Path,
+    )
+)
+@click.option(
+    '--output-dir',
+    required=False,
+    show_default=True,
+    default=Path('instrumented'),
+    help='Directory for program output.',
+    type=click.Path(
+        file_okay=False,
+        resolve_path=False,
+        path_type=Path,
+    )
+)
+def main(
+        project_path: Path,
+        build_dir: Path,
+        output_dir: Path,
+) -> None:
+    luna_ja_only_path = Path(__file__).parent.joinpath('luna_ja_only', 'luna').resolve()
+    luna_after_ja_path = Path(__file__).parent.joinpath('luna_after_ja', 'luna').resolve()
 
-    luna_ja_only_path = Path(__file__).parent / 'luna_ja_only' / 'luna'
-    luna_after_ja_path = Path(__file__).parent / 'luna_after_ja' / 'luna'
+    if not output_dir.is_absolute():
+        output_dir = project_path.joinpath(output_dir).resolve()
+    if not build_dir.is_absolute():
+        build_dir = output_dir.joinpath(build_dir).resolve()
 
     try:
         subprocess.run(
             args=[
                 'python3',
-                str(luna_ja_only_path.absolute()),
+                str(luna_ja_only_path),
                 '-q',
                 '--compile-only',
-                f'--build-dir={str(luna_build_path.absolute())}',
-                *[it.name for it in luna_src_path.iterdir() if it.suffix == '.fa'],
+                f'--build-dir={str(build_dir)}',
+                *[it.name for it in project_path.iterdir() if it.suffix == '.fa'],
             ],
-            cwd=luna_src_path,
+            cwd=project_path,
             capture_output=True,
             check=True
         )
@@ -377,7 +418,7 @@ def main() -> None:
         sys.exit(1)
 
     loop_assertions_count, ja_with_assertions = generate_loop_assertions(
-        ja=json.loads(luna_build_path.joinpath('program_foreign.ja').read_text(encoding='utf-8')),
+        ja=json.loads(build_dir.joinpath('program_foreign.ja').read_text(encoding='utf-8')),
     )
     condition_assertions_count, ja_with_assertions = generate_init_condition_assertions(
         ja_with_assertions,
@@ -389,18 +430,24 @@ def main() -> None:
         print('Program was not modified.')
         return
 
-    shutil.copyfile(src=C_ASSERT_CPP_PATH, dst=luna_src_path / C_ASSERT_CPP_PATH.name)
+    shutil.copytree(
+        src=project_path,
+        dst=output_dir,
+        ignore=lambda _1, _2: [output_dir.name],
+        dirs_exist_ok=True
+    )
+    shutil.copyfile(src=C_ASSERT_CPP_PATH, dst=output_dir / C_ASSERT_CPP_PATH.name)
 
-    luna_build_path.joinpath('program_foreign.ja').rename(luna_build_path.joinpath('program_foreign.bak.ja'))
-    luna_build_path.joinpath('program_foreign.ja') \
+    build_dir.joinpath('program_foreign.ja').rename(build_dir.joinpath('program_foreign.bak.ja'))
+    build_dir.joinpath('program_foreign.ja') \
         .write_text(json.dumps(ja_with_assertions, indent=2), encoding='utf-8')
 
     print('Run modified program with:')
     print(
-        f'{luna_after_ja_path.absolute()}',
-        f'--build-dir={str(luna_build_path.absolute())}',
+        f'{luna_after_ja_path.resolve()}',
+        f'--build-dir={str(build_dir)}',
         '--no-cleanup',
-        *(str(it.absolute()) for it in luna_src_path.iterdir() if it.suffix == '.fa'),
+        *(str(it.resolve()) for it in output_dir.iterdir() if it.suffix == '.fa'),
         sep=' '
     )
 
