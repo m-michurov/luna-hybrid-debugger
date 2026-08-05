@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import dataclasses
 import re
 import shutil
 import sys
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from enum import StrEnum
 from pathlib import Path
 from typing import Final
 
@@ -32,9 +35,31 @@ class Pragma:
     pass
 
 
+class PragmaName(StrEnum):
+    USER_TYPE = 'user_type'
+    SERIALIZED_SIZE = 'serialized_size'
+    SERIALIZE = 'serialize'
+    DESERIALIZE = 'deserialize'
+
+
 @dataclass(frozen=True)
 class PragmaUserType(Pragma):
     argument_name: str
+    type_name: str
+
+
+@dataclass(frozen=True)
+class PragmaSerializedSize(Pragma):
+    type_name: str
+
+
+@dataclass(frozen=True)
+class PragmaSerialize(Pragma):
+    type_name: str
+
+
+@dataclass(frozen=True)
+class PragmaDeserialize(Pragma):
     type_name: str
 
 
@@ -60,6 +85,24 @@ class InvalidUserTypePragmaArgumentName(Exception):
         return f'Function "{self.function_name}" has no argument named "{self.argument_name}"'
 
 
+class InvalidSignature(Exception):
+    def __init__(self, function_name: str, expected_signature: str) -> None:
+        self.function_name = function_name
+        self.expected_signature = expected_signature
+
+    def __str__(self) -> str:
+        return f'Function "{self.function_name}" must have signature {self.expected_signature}'
+
+
+class MissingPragmaForType(Exception):
+    def __init__(self, pragma_name: str, type_name: str) -> None:
+        self.pragma_name = pragma_name
+        self.type_name = type_name
+
+    def __str__(self) -> str:
+        return f'No function annotated with "{self.pragma_name}" for type "{self.type_name}"'
+
+
 def try_parse_pragma(line: str) -> Pragma | None:
     if not re.match(r'\s*#\s*pragma\s+adapt', line):
         return None
@@ -76,8 +119,14 @@ def try_parse_pragma(line: str) -> Pragma | None:
     pragma_arguments = [it.strip() for it in match.group(2).strip().split(',')]
 
     match pragma_type, pragma_arguments:
-        case 'user_type', [argument_name, type_name]:
+        case PragmaName.USER_TYPE, [argument_name, type_name]:
             return PragmaUserType(argument_name=argument_name, type_name=type_name)
+        case PragmaName.SERIALIZED_SIZE, [type_name]:
+            return PragmaSerializedSize(type_name=type_name)
+        case PragmaName.SERIALIZE, [type_name]:
+            return PragmaSerialize(type_name=type_name)
+        case PragmaName.DESERIALIZE, [type_name]:
+            return PragmaDeserialize(type_name=type_name)
         case _:
             raise UnknownPragma(pragma_type)
 
@@ -107,7 +156,7 @@ class FunctionArgument:
     def from_cursor(cursor: cindex.Cursor) -> FunctionArgument:
         return FunctionArgument(
             name=cursor.spelling,
-            type=get_declared_argument_type(cursor)
+            type=get_declared_type(cursor)
         )
 
 
@@ -116,15 +165,16 @@ class Statement:
     extent: cindex.SourceRange
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, unsafe_hash=True)
 class Function:
     name: str
-    arguments: list[FunctionArgument]
+    arguments: tuple[FunctionArgument, ...]
+    return_type: str
     is_extern_c: bool
 
-    location: cindex.SourceLocation
+    location: cindex.SourceLocation = field(hash=False)
 
-    body: Statement | None
+    body: Statement | None = field(hash=False)
 
     @staticmethod
     def from_cursor(cursor: cindex.Cursor) -> Function:
@@ -138,7 +188,8 @@ class Function:
 
         return Function(
             name=cursor.spelling,
-            arguments=[FunctionArgument.from_cursor(arg) for arg in cursor.get_arguments()],
+            arguments=tuple(FunctionArgument.from_cursor(arg) for arg in cursor.get_arguments()),
+            return_type=cursor.result_type.spelling,
             is_extern_c=is_function_extern_c(cursor),
             location=cursor.location,
             body=body
@@ -147,6 +198,8 @@ class Function:
 
 def parse_function_pragmas(source_lines: list[str], function: Function) -> list[Pragma]:
     pragmas = find_pragmas_before_line(lines=source_lines, line_number=function.location.line)
+
+    # Validate
     for pragma in pragmas:
         match pragma:
             case PragmaUserType(argument_name, _):
@@ -155,9 +208,39 @@ def parse_function_pragmas(source_lines: list[str], function: Function) -> list[
                         argument_name=argument_name,
                         function_name=function.name
                     )
+            case PragmaSerializedSize(type_name):
+                if len(function.arguments) == 1 and function.arguments[0].type == type_name:
+                    continue
+
+                raise InvalidSignature(function_name=function.name, expected_signature=f'({type_name})')
+            case PragmaSerialize(type_name):
+                if len(function.arguments) == 2:
+                    arg1, arg2 = function.arguments
+
+                    if arg1.type == type_name and arg2.type == 'void *':
+                        continue
+
+                raise InvalidSignature(function_name=function.name, expected_signature=f'({type_name}, void *)')
+            case PragmaDeserialize(type_name):
+                if len(function.arguments) == 2:
+                    arg1, arg2 = function.arguments
+
+                    if arg1.type == f'{type_name} &' and arg2.type == 'const void *':
+                        continue
+
+                raise InvalidSignature(function_name=function.name, expected_signature=f'({type_name} &, const void *)')
             case _:
                 pass
+
     return pragmas
+
+
+def generate_signature_cpp(function: Function) -> str:
+    return f'{function.return_type} {function.name}({', '.join([f'{argument.type} {argument.name}' for argument in function.arguments])}'')'
+
+
+def generate_forward_declaration_cpp(function: Function) -> str:
+    return f'{generate_signature_cpp(function)};'
 
 
 ARGUMENT_TYPE_INPUT_DF: Final[str] = 'const InputDF &'
@@ -201,7 +284,7 @@ def find_translation_unit_functions(translation_unit: cindex.TranslationUnit) ->
     return find_functions(translation_unit.cursor)
 
 
-def get_declared_argument_type(cursor: cindex.Cursor) -> str:
+def get_declared_type(cursor: cindex.Cursor) -> str:
     tokens = list(cursor.get_tokens())
 
     # drop parameter name (last token in most cases)
@@ -280,6 +363,36 @@ def generate_user_type_check_cpp(function_name: str, file: str, argument_name: s
             f'"File {file}, function {function_name}: expected {argument_name} type to have user type {type_name}");')
 
 
+def generate_copy_of_function_cpp(function: Function, source: str) -> str:
+    return (f'{generate_signature_cpp(function)} '
+            + source[function.body.extent.start.offset:function.body.extent.end.offset])
+
+
+def generate_deserialization_check_cpp(
+        function_name: str,
+        file: str,
+        serialized_parameter_name: str,
+        serialized_parameter_type: str,
+        buffer_parameter_name: str,
+        serialized_size_function_name: str,
+        serialize_function_name: str,
+        deserialize_function_name: str,
+) -> list[str]:
+    size_variable_name = '_size'
+    buffer_variable_name = '_buf'
+    deserialized_parameter_name = '_deserialized'
+    return [
+        '{',
+        f'    auto {size_variable_name} = {serialized_size_function_name}({serialized_parameter_name});',
+        f'    {serialized_parameter_type} {deserialized_parameter_name};',
+        f'    {deserialize_function_name}({deserialized_parameter_name}, {buffer_parameter_name});',
+        f'    std::vector<uint8_t> {buffer_variable_name}({size_variable_name});',
+        f'    {serialize_function_name}({deserialized_parameter_name}, {buffer_variable_name}.data());',
+        f'    {ASSERT_NAME_C}(0 == memcmp({buffer_variable_name}.data(), {buffer_parameter_name}, {size_variable_name}), "File {file}, function {function_name}: serialized buffers differ after deserialization");',
+        '}'
+    ]
+
+
 def get_source_indentation(source: str, location: cindex.SourceLocation) -> int:
     indent = 0
     char_index = location.offset - 2
@@ -295,6 +408,22 @@ def get_source_indentation(source: str, location: cindex.SourceLocation) -> int:
         char_index -= 1
 
     return indent
+
+
+def get_pragma(pragmas: list[Pragma], predicate: Callable[[Pragma], bool]) -> Pragma | None:
+    return next((pragma for pragma in pragmas if predicate(pragma)), None)
+
+
+def get_function_with_pragma(
+        functions: list[Function],
+        pragmas: dict[Function, list[Pragma]],
+        predicate: Callable[[Pragma], bool]
+) -> Function | None:
+    for function in functions:
+        if get_pragma(pragmas[function], predicate):
+            return function
+
+    return None
 
 
 def instrument_cpp(cpp_path: Path, instrumented_path: Path) -> None:
@@ -314,6 +443,9 @@ def instrument_cpp(cpp_path: Path, instrumented_path: Path) -> None:
     ]
 
     edits = [
+        Edit(position=0, text=f'#include <cstdint>\n'),
+        Edit(position=0, text=f'#include <cstddef>\n'),
+        Edit(position=0, text=f'#include <vector>\n'),
         Edit(position=0, text=f'#include "{C_HASH_HEADER_PATH.name}"\n'),
         Edit(position=0, text=f'#include "{C_ASSERT_HEADER_PATH.name}"\n'),
     ]
@@ -322,6 +454,12 @@ def instrument_cpp(cpp_path: Path, instrumented_path: Path) -> None:
     generated_type_assignments_count = 0
     generated_hash_checks_count = 0
     generated_hash_initializations_count = 0
+    generated_deserialization_checks_count = 0
+
+    pragmas: dict[Function, list[Pragma]] = {
+        function: parse_function_pragmas(source_lines, function)
+        for function in functions
+    }
 
     for function in functions:
         closing_bracket_indent = get_source_indentation(source, function.body.extent.end)
@@ -347,8 +485,9 @@ def instrument_cpp(cpp_path: Path, instrumented_path: Path) -> None:
         type_checks = []
         type_assignments = []
 
-        for pragma in parse_function_pragmas(source_lines, function):
+        for pragma in pragmas[function]:
             match pragma:
+                # User type assertions
                 case PragmaUserType(argument_name, type_name):
                     if argument_name in input_args:
                         type_checks.append(generate_user_type_check_cpp(
@@ -363,11 +502,64 @@ def instrument_cpp(cpp_path: Path, instrumented_path: Path) -> None:
                             type_name=type_name
                         ))
 
+                # Serialization assertions
+                case PragmaSerialize(type_name):
+                    serialized_size_function = get_function_with_pragma(
+                        functions, pragmas,
+                        lambda p: isinstance(p, PragmaSerializedSize) and p.type_name == type_name
+                    )
+                    if not serialized_size_function:
+                        raise MissingPragmaForType(pragma_name=PragmaName.SERIALIZED_SIZE, type_name=type_name)
+
+                    deserialize_function = get_function_with_pragma(
+                        functions, pragmas,
+                        lambda p: isinstance(p, PragmaDeserialize) and p.type_name == type_name
+                    )
+                    if not deserialize_function:
+                        raise MissingPragmaForType(pragma_name=PragmaName.DESERIALIZE, type_name=type_name)
+
+                    serialize_function_nonrec_name = f'_adapt_{function.name}_nonrec'
+                    serialize_function_nonrec = dataclasses.replace(function, name=serialize_function_nonrec_name)
+
+                    edits.append(Edit.from_lines(
+                        position=body_end - 1,
+                        lines=generate_deserialization_check_cpp(
+                            file=file,
+                            function_name=function.name,
+                            serialized_parameter_name=function.arguments[0].name,
+                            serialized_parameter_type=function.arguments[0].type,
+                            buffer_parameter_name=function.arguments[1].name,
+                            serialized_size_function_name=serialized_size_function.name,
+                            serialize_function_name=serialize_function_nonrec_name,
+                            deserialize_function_name=deserialize_function.name,
+                        ),
+                        indent=generated_indent
+                    ))
+
+                    edits.append(Edit.from_lines(
+                        position=body_end - 1,
+                        lines=[
+                            generate_forward_declaration_cpp(serialize_function_nonrec),
+                            generate_forward_declaration_cpp(serialized_size_function),
+                            generate_forward_declaration_cpp(deserialize_function)
+                        ],
+                        indent=generated_indent
+                    ))
+
+                    edits.append(Edit(
+                        position=body_end,
+                        text=f'\n{generate_copy_of_function_cpp(serialize_function_nonrec, source)}'
+                    ))
+
+                    generated_deserialization_checks_count += 1
+
         generated_type_checks_count += len(type_checks)
         generated_type_assignments_count += len(type_assignments)
 
-        edits.append(Edit.from_lines(position=body_start + 1, lines=type_checks, indent=generated_indent))
-        edits.append(Edit.from_lines(position=body_start + 1, lines=type_assignments, indent=generated_indent))
+        if type_checks:
+            edits.append(Edit.from_lines(position=body_start + 1, lines=type_checks, indent=generated_indent))
+        if type_assignments:
+            edits.append(Edit.from_lines(position=body_start + 1, lines=type_assignments, indent=generated_indent))
 
         # Unconditional hash checks
         hash_initializations = []
@@ -383,8 +575,12 @@ def instrument_cpp(cpp_path: Path, instrumented_path: Path) -> None:
         generated_hash_checks_count += len(hash_checks)
         generated_hash_initializations_count += len(hash_initializations)
 
-        edits.append(Edit.from_lines(position=body_start + 1, lines=hash_initializations, indent=generated_indent))
-        edits.append(Edit.from_lines(position=body_end - 1, lines=hash_checks, indent=generated_indent))
+        if hash_initializations:
+            edits.append(Edit.from_lines(position=body_start + 1, lines=hash_initializations, indent=generated_indent))
+        if hash_checks:
+            edits.append(Edit.from_lines(position=body_end - 1, lines=hash_checks, indent=generated_indent))
+
+    print(f'Applying {len(edits)} edits')
 
     source = apply_edits(source, edits)
 
@@ -395,17 +591,26 @@ def instrument_cpp(cpp_path: Path, instrumented_path: Path) -> None:
     print(f'Generated {generated_type_checks_count} type checks.')
     print(f'Generated {generated_hash_initializations_count} hash initializations.')
     print(f'Generated {generated_hash_checks_count} hash checks.')
+    print(f'Generated {generated_deserialization_checks_count} deserialization checks.')
     print(f'See {dst_cpp_path}.')
+
+    if generated_type_checks_count > 0:
+        print(f'Type checks generated, debug mode (luna -g) required to run instrumented program.')
 
 
 def main() -> None:
-    if len(sys.argv) != 3:
-        print('Usage: python instrument_cpp.py file.cpp instrumented_path')
-        sys.exit(1)
+    match sys.argv:
+        case [_, cpp_path_str, instrumented_path_str]:
+            pass
+        case [_, cpp_path_str]:
+            instrumented_path_str = 'instrumented'
+        case _:
+            print('Usage: python instrument_cpp.py file.cpp instrumented_path')
+            sys.exit(1)
 
-    cpp_path = Path(sys.argv[1])
+    cpp_path = Path(cpp_path_str)
+    instrumented_path = Path(instrumented_path_str)
 
-    instrumented_path = Path(sys.argv[2])
     if not instrumented_path.is_absolute():
         instrumented_path = cpp_path.parent / instrumented_path
     if instrumented_path.exists() and not instrumented_path.is_dir():
