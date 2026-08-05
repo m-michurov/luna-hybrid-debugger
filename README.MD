@@ -14,3 +14,145 @@ sudo ln -s libclang-18.so.1 libclang.so
 ```bash
 pip install requirements.txt
 ```
+
+## Использование
+
+### 1. Автоматическое инструментирование LuNA-кода
+
+Пример использования:
+```bash
+$ python3 instrument_luna.py tests/01_for/01_simple/
+Generated 2 assertion(s).
+Run modified program with:
+./luna_after_ja/luna --build-dir=./tests/01_for/01_simple/instrumented/build --no-cleanup ./tests/01_for/01_simple/instrumented/main.fa
+```
+
+Запуск программы:
+```bash
+$ ./luna_after_ja/luna --build-dir=./tests/01_for/01_simple/instrumented/build --no-cleanup ./tests/01_for/01_simple/instrumented/main.fa
+5
+7
+8
+6
+10
+9
+1
+3
+4
+5
+2
+6
+8
+9
+10
+7
+luna: fatal error: run-time error: errcode=-6
+err> Assertion failed: (((M / 2) <= 1) && ((M + 1) <= N)) (init bounds for y)
+err> Assertion failed: ((0 <= 1) && (M <= N)) (init bounds for x)
+err> terminate called after throwing an instance of 'std::runtime_error'
+err> terminate called after throwing an instance of 'std::runtime_error'
+err>   what():  generated assertion failed
+err>   what():  generated assertion failed
+err> [MS-7B53:04590] *** Process received signal ***
+err> 
+```
+
+Выполняется генерация проверок на следующие ошибки:
+ * В цикле for используются индексы ФД, которые не были инициализированы (см. [tests/01_for/01_simple/main.fa](tests/01_for/01_simple/main.fa)).
+ * При использовании одиночного ФД не выполняется условие инициализации (см. [tests/02_if/01_simple/main.fa](tests/02_if/01_simple/main.fa)).
+
+### 1. Автоматическое инструментирование С++-кода
+
+Пример использования:
+```bash
+$ python3 instrument_cpp.py tests/03_immutability/01_input_df_modified/ucodes.cpp
+Applying 21 edits
+Generated 0 type initializations.
+Generated 0 type checks (skipped 0 redundant checks).
+Generated 15 hash initializations.
+Generated 15 hash checks.
+Generated 0 deserialization checks.
+See /home/mmichurov/Projects/luna-assert-generator/tests/03_immutability/01_input_df_modified/instrumented/ucodes.cpp.
+```
+
+Запуск программы:
+```bash
+$ luna tests/03_immutability/01_input_df_modified/instrumented/jacobi.fa 100 100 1 1
+eps: 0.000000010
+luna: fatal error: run-time error: errcode=-6
+err> Assertion failed: File ucodes.cpp, function update_subgrid_no_edges: input parameter prev_df changed
+err> terminate called after throwing an instance of 'std::runtime_error'
+err>   what():  generated assertion failed
+err> [MS-7B53:06942] *** Process received signal ***
+err> [MS-7B53:06942] Signal: Aborted (6)
+err> [MS-7B53:06942] Signal code:  (-6)
+err> [MS-7B53:06942] [ 0] /lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x7c6fc5845330]
+err> [MS-7B53:06942] [ 1] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x11c)[0x7c6fc589eb2c]
+err> [MS-7B53:06942] [ 2] /lib/x86_64-linux-gnu/libc.so.6(gsignal+0x1e)[0x7c6fc584527e]
+err> [MS-7B53:06942] [ 3] /lib/x86_64-linux-gnu/libc.so.6(abort+0xdf)[0x7c6fc58288ff]
+err> [MS-7B53:06942] [ 4] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xa5ff5)[0x7c6fc5ca5ff5]
+err> [MS-7B53:06942] [ 5] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xbb0da)[0x7c6fc5cbb0da]
+err> [MS-7B53:06942] [ 6] /lib/x86_64-linux-gnu/libstdc++.so.6(_ZSt10unexpectedv+0x0)[0x7c6fc5ca5a55]
+err> [MS-7B53:06942] [ 7] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xbb391)[0x7c6fc5cbb391]
+err> [MS-7B53:06942] [ 8] /home/mmichurov/Apps/luna/build/programs/home/mmichurov/Projects/luna-assert-generator/tests/03_immutability/01_input_df_modified/instrumented/jacobi.fa/libucodes.so(+0x5996)[0x7c6fc6049996]
+err> [MS-7B53:06942] [ 9] /home/mmichurov/Apps/luna/build/programs/home/mmichurov/Projects/luna-assert-generator/tests/03_immutability/01_input_df_modified/instrumented/jacobi.fa/libucodes.so(_Z8block_41R2CF+0xfc)[0x7c6fc605d66c]
+err> [MS-7B53:06942] [10] /home/mmichurov/Apps/luna/lib/librts.so(+0x4b7d3)[0x7c6fc60c87d3]
+err> [MS-7B53:06942] [11] /home/mmichurov/Apps/luna/lib/libcpu_threadpool.so(_ZN13CPUThreadPool7routineEv+0x17c)[0x7c6fc607431c]
+err> [MS-7B53:06942] [12] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xecdb4)[0x7c6fc5cecdb4]
+err> [MS-7B53:06942] [13] /lib/x86_64-linux-gnu/libc.so.6(+0x9caa4)[0x7c6fc589caa4]
+err> [MS-7B53:06942] [14] /lib/x86_64-linux-gnu/libc.so.6(+0x129c6c)[0x7c6fc5929c6c]
+err> [MS-7B53:06942] *** End of error message ***
+err>
+```
+
+Выполняется генерация проверок на следующие ошибки:
+ * Входной параметр атомарного ФК изменен (см. [tests/03_immutability/01_input_df_modified/ucodes.cpp](tests/03_immutability/01_input_df_modified/ucodes.cpp)).
+ * Пользовательский тип входного параметра атомарного ФК не соответствует ожидаемому (см. [tests/04_user_type](tests/04_user_type)).
+
+Для генерации проверок типов необходимо с помощью директив
+```c++
+#pragma adapt user_type(argument_name, type_name)
+```
+указать имя пользовательского типа для интересующих параметров. 
+Здесь `argument_name` - имя параметра, `type_name` - имя типа. Тип не обязательно должен
+в явном виде присутствовать в коде (в частности, не нужно объявлять структуру с именем `type_name`).
+Имя типа используется как метка и записывается в поле `DBG_INFO` класса `DF`. Следовательно, для запуска 
+инструментированного кода необходимо использовать `luna -g` (отладочный режим).
+
+Если имеется информация о зависимостях по данным между атомарными ФК 
+(см. [tests/04_user_type/04_simple_ok_redundant/ddg.json](tests/04_user_type/04_simple_ok_redundant/ddg.json), 
+[tests/04_user_type/05_simple_ok_redundant_partial/ddg.json](tests/04_user_type/05_simple_ok_redundant_partial/ddg.json)),
+это можно указать с помощью ключа `--atomic-ddg`, например:
+```bash
+$ python3 instrument_cpp.py tests/04_user_type/04_simple_ok_redundant/ucodes.cpp --atomic-ddg ddg.json
+Applying 11 edits
+Generated 2 type initializations.
+Generated 0 type checks (skipped 3 redundant checks).
+Generated 3 hash initializations.
+Generated 3 hash checks.
+Generated 0 deserialization checks.
+See /home/mmichurov/Projects/luna-assert-generator/tests/04_user_type/04_simple_ok_redundant/instrumented/ucodes.cpp.
+```
+Если можно установить, что входной параметр может принимать только значения ожидаемого типа, проверка для него не генерируется.
+
+ * Некорректная сериализация/десериализация (см. [tests/05_serialization](tests/05_serialization)). 
+
+Для генерации проверки сериализации/десериализации необходимо объявить и пометить с помощью директив функции
+```c++
+#pragma adapt serialized_size(type_name)
+size_t s(type_name); 
+
+#pragma adapt serialize(type_name)
+void f(type_name, void *);
+
+#pragma adapt deserialize(type_name)
+void g(type_name &, const void *)
+```
+
+Здесь `s`, `f` и `g` - это функции получения размера сериализованного значения,
+сериализации и десериализации соответственно. Имена функций могут быть любыми, 
+но `type_name` должен быть типом C++, поскольку используется в сигнатурах
+(например, см. [tests/05_serialization/06_cpp_struct_error](tests/05_serialization/06_cpp_struct_error)). 
+
+Проверяется то, что после десериализации буфера и повторной сериализации в другой буфер,
+сериализованные представления будут совпадать. 
