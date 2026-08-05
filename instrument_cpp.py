@@ -558,7 +558,10 @@ def instrument_cpp(
            and function.body is not None
     ]
 
-    data_dependencies = load_data_dependencies(data_dependencies_path, functions)
+    if data_dependencies_path is not None:
+        data_dependencies = load_data_dependencies(data_dependencies_path, functions)
+    else:
+        data_dependencies = {}
 
     edits = [
         Edit(position=0, text=f'#include <cstdint>\n'),
