@@ -587,7 +587,7 @@ def instrument_cpp(
         closing_bracket_indent = get_source_indentation(source, function.body.extent.end)
         generated_indent = 4 + closing_bracket_indent
 
-        file = str(function.location.file)
+        file = Path(str(function.location.file)).name
 
         # Pragma-controlled code generation
         body_start = function.body.extent.start.offset
