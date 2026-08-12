@@ -780,6 +780,14 @@ def main(
 
     instrument_cpp(cpp_path, output_dir, atomic_ddg)
 
+    print('Run modified program with:')
+    print(
+        'luna',
+        '-g',
+        *(str(it.resolve()) for it in output_dir.iterdir() if it.suffix == '.fa'),
+        sep=' '
+    )
+
 
 if __name__ == '__main__':
     main()
