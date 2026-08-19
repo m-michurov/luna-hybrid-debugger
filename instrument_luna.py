@@ -216,6 +216,35 @@ def find_single_uses(sub: dict, program: dict) -> dict[str, list[list]]:
     return result
 
 
+def is_error_loop_in_main(error_loop: dict) -> bool:
+    error_loop_where = error_loop['where']
+
+    if len(error_loop_where) != 2:
+        return False
+
+    if error_loop_where[0]['name'] != 'main' or error_loop_where[1]['name'] != 'for':
+        return False
+
+    return True
+
+
+def find_matching_program_loop(
+        error_loop: dict,
+        name: str,
+        program_loops: dict[str, list[tuple[list, dict]]],
+        ti: TextInfo
+) -> tuple[list, dict] | None:
+    error_loop_where = error_loop['where']
+    error_loop_line = error_loop_where[1]['line']
+
+    for body, init_loop in program_loops[name]:
+        line = ti.line_number(init_loop['begin'])
+        if line != error_loop_line:
+            continue
+
+        return body, init_loop
+
+
 # TODO handle init/use loops in subs - pass loop bounds as parameters if needed
 # TODO handle single uses
 # TODO handle init/use conditions
@@ -243,47 +272,61 @@ def generate_loop_assertions(
         'type': 'extern'
     }
 
-    init_loops = find_init_loops(ja['main'], ja)
-    use_loops = find_use_loops(ja['main'], ja)
+    init_loops: dict[str, list[tuple[list, dict]]] = find_init_loops(ja['main'], ja)
+    print(
+        f'Found {sum(len(it) for it in init_loops.values())} init loops in main ({', '.join(init_loops.keys())}).')
+    use_loops: dict[str, list[tuple[list, dict]]] = find_use_loops(ja['main'], ja)
+    print(
+        f'Found {sum(len(it) for it in use_loops.values())} use loops in main ({', '.join(use_loops.keys())}).')
 
     # Filter use loops to only include those mentioned in SEM3.3 errors
     if found_errors is not None:
         sem3_3_errors = [error for error in found_errors if error['error_code'].lower() == 'sem3.3']
-        use_loops2 = {name: [] for name in use_loops}
+        print(f'Will only check loops involved in {len(sem3_3_errors)} SEM3.3 errors.')
+        use_loops2 = {}
+        init_loops2 = {}
         # TODO conditions are ignored
         # TODO multiple/non-loop initializations are ignored
         # TODO report ignored errors?
         for sem3_3_error in sem3_3_errors:
             initialized = sem3_3_error['details']['initialized']
-            if len(initialized) != 1 or 'loop' not in initialized[0]:
-                continue
-
             used = sem3_3_error['details']['used']
             name = used['df']['df']['name']
 
-            if name not in use_loops:
+            if name not in init_loops or name not in use_loops:
                 continue
 
-            loop = used['loop']
-            loop_where = loop['where']
-            if len(loop_where) != 2 or loop_where[0]['name'] != 'main' or loop_where[1]['name'] != 'for':
+            if len(initialized) != 1 or 'loop' not in initialized[0]:
                 continue
 
-            loop_line = loop_where[1]['line']
+            error_init_loop = initialized[0]['loop']
+            if not is_error_loop_in_main(error_init_loop):
+                continue
 
-            for body, use_loop in use_loops[name]:
-                line = ti.line_number(use_loop['begin'])
-                if line != loop_line:
-                    continue
+            if (program_init_loop := find_matching_program_loop(error_init_loop, name, init_loops, ti)) is not None:
+                init_loops2[name] = init_loops2.get(name, []) + [program_init_loop]
 
-                use_loops2[name].append((body, use_loop))
-                break
+            error_use_loop = used['loop']
+            if not is_error_loop_in_main(error_use_loop):
+                continue
+
+            if (program_use_loop := find_matching_program_loop(error_use_loop, name, use_loops, ti)) is not None:
+                use_loops2[name] = use_loops2.get(name, []) + [program_use_loop]
 
         use_loops = use_loops2
         del use_loops2
+        init_loops = init_loops2
+        del init_loops2
+
+    print(
+        f'Will check {sum(len(it) for it in init_loops.values())} init loops ({', '.join(init_loops.keys())}).')
+    print(
+        f'Will check {sum(len(it) for it in use_loops.values())} use loops ({', '.join(use_loops.keys())}).')
 
     for base_name, name_use_loops in use_loops.items():
-        assert len(init_loops[base_name]) == 1
+        assert len(name_use_loops) > 0
+        assert len(init_loops[base_name]) > 0
+        assert len(init_loops[base_name]) == 1, f'{base_name} has {len(init_loops[base_name])} init loops'
         _, init_loop = init_loops[base_name][0]
 
         init_first = init_loop['first']
@@ -462,7 +505,7 @@ def main(
 
     found_errors_path = project_path.joinpath('.adapt', 'reporter', 'found_errors.json').resolve()
     if found_errors_path.exists():
-        print(f'Attempting to use {found_errors_path.name} to only generate necessary checks')
+        print(f'Attempting to use {found_errors_path.name} to only generate necessary checks.')
 
     loop_assertions_count, ja_with_assertions = generate_loop_assertions(
         ja=json.loads(build_dir.joinpath('program_foreign.ja').read_text(encoding='utf-8')),

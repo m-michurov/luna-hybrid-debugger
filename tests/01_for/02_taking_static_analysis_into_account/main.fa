@@ -2,7 +2,7 @@ C++ sub set_int(name x, int v) ${{ x = v; $}}
 C++ sub print(int v) ${{ printf("%d\n", v); $}}
 
 sub main() {
-    df x, y, N, M;
+    df x, y, z, N, M;
 
     cf set_int[0]: set_int(N, 10);
     cf set_int[0]: set_int(M, 11);
@@ -25,5 +25,10 @@ sub main() {
 
     for k = 1..M+1 {
         print(y[k]);
+    }
+
+    for i = 0..10 {
+        set_int(z[i], i);
+        print(z[i]);
     }
 }
