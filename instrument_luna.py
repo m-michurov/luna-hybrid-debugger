@@ -134,6 +134,9 @@ def find_init_loops(sub: dict, program: dict) -> dict[str, list[tuple[list, dict
 
 
 def find_use_loops(sub: dict, program: dict) -> dict[str, list[tuple[list, dict]]]:
+    """
+    :return: {DF_NAME: [(BODY_CONTAINING_FOR, FOR), ...], ...}
+    """
     result: dict[str, list[tuple[list, dict]]] = {}
 
     for statement in sub['body']:
@@ -217,7 +220,11 @@ def find_single_uses(sub: dict, program: dict) -> dict[str, list[list]]:
 # TODO handle single uses
 # TODO handle init/use conditions
 # TODO eliminate assertions that can be resolved statically
-def generate_loop_assertions(ja: dict) -> tuple[int, dict]:
+def generate_loop_assertions(
+        ja: dict,
+        ti: TextInfo,
+        found_errors: list[dict] | None = None,
+) -> tuple[int, dict]:
     assertions_count = 0
 
     ja_with_assertions = ja
@@ -238,6 +245,42 @@ def generate_loop_assertions(ja: dict) -> tuple[int, dict]:
 
     init_loops = find_init_loops(ja['main'], ja)
     use_loops = find_use_loops(ja['main'], ja)
+
+    # Filter use loops to only include those mentioned in SEM3.3 errors
+    if found_errors is not None:
+        sem3_3_errors = [error for error in found_errors if error['error_code'].lower() == 'sem3.3']
+        use_loops2 = {name: [] for name in use_loops}
+        # TODO conditions are ignored
+        # TODO multiple/non-loop initializations are ignored
+        # TODO report ignored errors?
+        for sem3_3_error in sem3_3_errors:
+            initialized = sem3_3_error['details']['initialized']
+            if len(initialized) != 1 or 'loop' not in initialized[0]:
+                continue
+
+            used = sem3_3_error['details']['used']
+            name = used['df']['df']['name']
+
+            if name not in use_loops:
+                continue
+
+            loop = used['loop']
+            loop_where = loop['where']
+            if len(loop_where) != 2 or loop_where[0]['name'] != 'main' or loop_where[1]['name'] != 'for':
+                continue
+
+            loop_line = loop_where[1]['line']
+
+            for body, use_loop in use_loops[name]:
+                line = ti.line_number(use_loop['begin'])
+                if line != loop_line:
+                    continue
+
+                use_loops2[name].append((body, use_loop))
+                break
+
+        use_loops = use_loops2
+        del use_loops2
 
     for base_name, name_use_loops in use_loops.items():
         assert len(init_loops[base_name]) == 1
@@ -417,8 +460,14 @@ def main(
         print(e.stderr.decode(), file=sys.stderr)
         sys.exit(1)
 
+    found_errors_path = project_path.joinpath('.adapt', 'reporter', 'found_errors.json').resolve()
+    if found_errors_path.exists():
+        print(f'Attempting to use {found_errors_path.name} to only generate necessary checks')
+
     loop_assertions_count, ja_with_assertions = generate_loop_assertions(
         ja=json.loads(build_dir.joinpath('program_foreign.ja').read_text(encoding='utf-8')),
+        ti=TextInfo(json.loads(build_dir.joinpath('preprocessed.fa.ti').read_text(encoding='utf-8'))),
+        found_errors=json.loads(found_errors_path.read_text(encoding='utf-8')) if found_errors_path.exists() else None,
     )
     condition_assertions_count, ja_with_assertions = generate_init_condition_assertions(
         ja_with_assertions,
