@@ -1,0 +1,244 @@
+[
+  {
+    "details": {
+      "initialized": [
+        {
+          "df": {
+            "conditions": [],
+            "df": {
+              "declared": [
+                [
+                  {
+                    "file": "./main.fa",
+                    "line": 4,
+                    "name": "main"
+                  }
+                ]
+              ],
+              "name": "x"
+            },
+            "local": "x[i]",
+            "true": "x[i]",
+            "where": [
+              {
+                "file": "./main.fa",
+                "line": 4,
+                "name": "main"
+              },
+              {
+                "file": "./main.fa",
+                "line": 10,
+                "name": "for"
+              },
+              {
+                "file": "./main.fa",
+                "line": 11,
+                "name": "set_int"
+              }
+            ]
+          },
+          "loop": {
+            "first": "0",
+            "last": "N",
+            "var": "i",
+            "where": [
+              {
+                "file": "./main.fa",
+                "line": 4,
+                "name": "main"
+              },
+              {
+                "file": "./main.fa",
+                "line": 10,
+                "name": "for"
+              }
+            ]
+          },
+          "offset": "0",
+          "step": "1",
+          "true_lower": "0",
+          "true_upper": "N"
+        }
+      ],
+      "used": {
+        "df": {
+          "conditions": [],
+          "df": {
+            "declared": [
+              [
+                {
+                  "file": "./main.fa",
+                  "line": 4,
+                  "name": "main"
+                }
+              ]
+            ],
+            "name": "x"
+          },
+          "local": "x[i]",
+          "true": "x[i]",
+          "where": [
+            {
+              "file": "./main.fa",
+              "line": 4,
+              "name": "main"
+            },
+            {
+              "file": "./main.fa",
+              "line": 14,
+              "name": "for"
+            },
+            {
+              "file": "./main.fa",
+              "line": 15,
+              "name": "print"
+            }
+          ]
+        },
+        "loop": {
+          "first": "1",
+          "last": "M",
+          "var": "i",
+          "where": [
+            {
+              "file": "./main.fa",
+              "line": 4,
+              "name": "main"
+            },
+            {
+              "file": "./main.fa",
+              "line": 14,
+              "name": "for"
+            }
+          ]
+        },
+        "offset": "0",
+        "step": "1",
+        "true_lower": "1",
+        "true_upper": "M"
+      }
+    },
+    "error_code": "SEM3.3"
+  },
+  {
+    "details": {
+      "initialized": [
+        {
+          "df": {
+            "conditions": [],
+            "df": {
+              "declared": [
+                [
+                  {
+                    "file": "./main.fa",
+                    "line": 4,
+                    "name": "main"
+                  }
+                ]
+              ],
+              "name": "y"
+            },
+            "local": "y[j]",
+            "true": "y[j]",
+            "where": [
+              {
+                "file": "./main.fa",
+                "line": 4,
+                "name": "main"
+              },
+              {
+                "file": "./main.fa",
+                "line": 22,
+                "name": "for"
+              },
+              {
+                "file": "./main.fa",
+                "line": 23,
+                "name": "set_int"
+              }
+            ]
+          },
+          "loop": {
+            "first": "(M // 2)",
+            "last": "N",
+            "var": "j",
+            "where": [
+              {
+                "file": "./main.fa",
+                "line": 4,
+                "name": "main"
+              },
+              {
+                "file": "./main.fa",
+                "line": 22,
+                "name": "for"
+              }
+            ]
+          },
+          "offset": "0",
+          "step": "1",
+          "true_lower": "(M // 2)",
+          "true_upper": "N"
+        }
+      ],
+      "used": {
+        "df": {
+          "conditions": [],
+          "df": {
+            "declared": [
+              [
+                {
+                  "file": "./main.fa",
+                  "line": 4,
+                  "name": "main"
+                }
+              ]
+            ],
+            "name": "y"
+          },
+          "local": "y[k]",
+          "true": "y[k]",
+          "where": [
+            {
+              "file": "./main.fa",
+              "line": 4,
+              "name": "main"
+            },
+            {
+              "file": "./main.fa",
+              "line": 26,
+              "name": "for"
+            },
+            {
+              "file": "./main.fa",
+              "line": 27,
+              "name": "print"
+            }
+          ]
+        },
+        "loop": {
+          "first": "1",
+          "last": "(M + 1)",
+          "var": "k",
+          "where": [
+            {
+              "file": "./main.fa",
+              "line": 4,
+              "name": "main"
+            },
+            {
+              "file": "./main.fa",
+              "line": 26,
+              "name": "for"
+            }
+          ]
+        },
+        "offset": "0",
+        "step": "1",
+        "true_lower": "1",
+        "true_upper": "(M + 1)"
+      }
+    },
+    "error_code": "SEM3.3"
+  }
+]
