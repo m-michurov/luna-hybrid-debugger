@@ -535,6 +535,8 @@ def main(
         .write_text(json.dumps(ja_with_assertions, indent=2), encoding='utf-8')
 
     print('Run modified program with:')
+    print(f'cd {output_dir}')
+    print(f'rm -f .adapt_error_*.dat')
     print(
         f'{luna_after_ja_path.resolve()}',
         f'--build-dir={str(build_dir)}',
@@ -542,6 +544,7 @@ def main(
         *(str(it.resolve()) for it in output_dir.iterdir() if it.suffix == '.fa'),
         sep=' '
     )
+    print(f'cd -')
 
 
 if __name__ == '__main__':
