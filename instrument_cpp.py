@@ -386,7 +386,8 @@ def generate_user_type_assignment_cpp(argument_name: str, type_name: str) -> str
 def generate_user_type_check_cpp(function_name: str, file: str, argument_name: str, type_name: str) -> str:
     return (f'{ASSERT_NAME_C}('
             f'{argument_name}.DBG_INFO.find({generate_user_type_string_cpp(type_name)}) != std::string::npos, '
-            f'"File {file}, function {function_name}: expected {argument_name} type to have user type {type_name}");')
+            f'("File {file}, function {function_name}: expected {argument_name} type to have user type {type_name}'
+            f'\\nDBG_INFO="+{argument_name}.DBG_INFO).c_str());')
 
 
 def generate_copy_of_function_cpp(function: Function, source: str) -> str:
