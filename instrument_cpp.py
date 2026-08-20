@@ -781,13 +781,15 @@ def main(
     instrument_cpp(cpp_path, output_dir, atomic_ddg)
 
     print('Run modified program with:')
-    print(f'cd {output_dir}')
-    print(f'rm -f .adapt_error_*.dat')
+    print(f'cd {output_dir} ;', end=' ')
+    print(f'rm -f .adapt_error_*.dat ;', end=' ')
     print(
         'luna',
         '-g',
         *(str(it.resolve()) for it in output_dir.iterdir() if it.suffix == '.fa'),
-        sep=' '
+        ';',
+        sep=' ',
+        end=' '
     )
     print(f'cd -')
 
