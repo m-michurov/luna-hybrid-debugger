@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 
+# NOTE this is an edited copy of the original luna script
+
 # TODO add ability to use some other temporary directory for building
 # tests, not .luna subdirectory, and allow setup via environment var.
 
 import sys, os, subprocess, json, re, datetime, signal, shutil
+
+sys.path.append(os.path.join(os.environ['LUNA_HOME'], 'scripts'))
+
 from common import *
 from work_json_file import read_json_file, write_json_file
 import importlib.util
