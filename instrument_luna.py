@@ -38,7 +38,7 @@ def ja_indexed_expression_to_str(expr: dict) -> str:
     if not indices:
         return name
 
-    return f'{name}[{', '.join(map(ja_expression_to_str, indices))}]'
+    return f'{name}[{", ".join(map(ja_expression_to_str, indices))}]'
 
 
 JA_UNARY_OPERATORS: Final[set[str]] = {'neg', }
@@ -70,7 +70,7 @@ def ja_expression_to_str(expr: dict) -> str:
         case 'iconst':
             return ja_arith_expression_to_str(expr)
         case 'icast':
-            return f'int({ja_expression_to_str(expr['expr'])})'
+            return f'int({ja_expression_to_str(expr["expr"])})'
         case op if op in JA_BINARY_OPERATORS or op in JA_UNARY_OPERATORS:
             return ja_arith_expression_to_str(expr)
         case unsupported_type:
@@ -78,21 +78,21 @@ def ja_expression_to_str(expr: dict) -> str:
 
 
 def print_statement(statement: dict, indent: int = 0) -> None:
-    print(f'{' ' * indent}{statement['type']}')
+    print(f'{" " * indent}{statement["type"]}')
 
     indent += 1
     padding = ' ' * indent
 
     match statement['type']:
         case 'dfs':
-            print(f'{padding}names=[{', '.join(statement['names'])}]')
+            print(f'{padding}names=[{", ".join(statement["names"])}]')
         case 'exec':
-            print(f'{padding}code={statement['code']}')
-            print(f'{padding}args=[{', '.join(map(ja_expression_to_str, statement['args']))}]')
+            print(f'{padding}code={statement["code"]}')
+            print(f'{padding}args=[{", ".join(map(ja_expression_to_str, statement["args"]))}]')
         case 'for':
-            print(f'{padding}var={statement['var']}')
-            print(f'{padding}first={ja_expression_to_str(statement['first'])}')
-            print(f'{padding}last={ja_expression_to_str(statement['last'])}')
+            print(f'{padding}var={statement["var"]}')
+            print(f'{padding}first={ja_expression_to_str(statement["first"])}')
+            print(f'{padding}last={ja_expression_to_str(statement["last"])}')
 
             for body_statement in statement['body']:
                 print_statement(body_statement, indent + 1)
@@ -295,10 +295,10 @@ def generate_loop_assertions(
 
     init_loops: dict[str, list[tuple[list, dict]]] = find_init_loops(ja['main'], ja)
     print(
-        f'Found {sum(len(it) for it in init_loops.values())} init loops in main ({', '.join(init_loops.keys())}).')
+        f'Found {sum(len(it) for it in init_loops.values())} init loops in main ({", ".join(init_loops.keys())}).')
     use_loops: dict[str, list[tuple[list, dict]]] = find_use_loops(ja['main'], ja)
     print(
-        f'Found {sum(len(it) for it in use_loops.values())} use loops in main ({', '.join(use_loops.keys())}).')
+        f'Found {sum(len(it) for it in use_loops.values())} use loops in main ({", ".join(use_loops.keys())}).')
 
     # Filter use loops to only include those mentioned in SEM3.3 errors
     if found_errors is not None:
@@ -340,9 +340,9 @@ def generate_loop_assertions(
         del init_loops2
 
     print(
-        f'Will check {sum(len(it) for it in init_loops.values())} init loops ({', '.join(init_loops.keys())}).')
+        f'Will check {sum(len(it) for it in init_loops.values())} init loops ({", ".join(init_loops.keys())}).')
     print(
-        f'Will check {sum(len(it) for it in use_loops.values())} use loops ({', '.join(use_loops.keys())}).')
+        f'Will check {sum(len(it) for it in use_loops.values())} use loops ({", ".join(use_loops.keys())}).')
 
     for base_name, name_use_loops in use_loops.items():
         assert len(name_use_loops) > 0

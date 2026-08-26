@@ -262,7 +262,7 @@ def parse_function_pragmas(source_lines: list[str], function: Function) -> list[
 
 
 def generate_signature_cpp(function: Function) -> str:
-    return f'{function.return_type} {function.name}({', '.join([f'{argument.type} {argument.name}' for argument in function.arguments])}'')'
+    return f'{function.return_type} {function.name}({", ".join([f"{argument.type} {argument.name}" for argument in function.arguments])}'')'
 
 
 def generate_forward_declaration_cpp(function: Function) -> str:
