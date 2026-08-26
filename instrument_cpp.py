@@ -313,7 +313,7 @@ def find_translation_unit_functions(translation_unit: cindex.TranslationUnit) ->
 def get_declared_type(cursor: cindex.Cursor) -> str:
     tokens = list(cursor.get_tokens())
 
-    # drop parameter name (last token in most cases)
+    # drop argument name (last token in most cases)
     if not tokens:
         return ''
 
@@ -347,12 +347,12 @@ def get_declared_type(cursor: cindex.Cursor) -> str:
     return ' '.join(result.split())
 
 
-def generate_hash_call_cpp(parameter_name: str) -> str:
-    return f'{HASH_NAME_C}({parameter_name}.get_data(), {parameter_name}.get_size())'
+def generate_hash_call_cpp(argument_name: str) -> str:
+    return f'{HASH_NAME_C}({argument_name}.get_data(), {argument_name}.get_size())'
 
 
-def generate_hash_variable_name_cpp(parameter_name: str) -> str:
-    return f'__adapt_hash_{parameter_name}'
+def generate_hash_variable_name_cpp(argument_name: str) -> str:
+    return f'__adapt_hash_{argument_name}'
 
 
 def generate_hash_initialization_cpp(argument_name: str) -> str:
@@ -362,7 +362,7 @@ def generate_hash_initialization_cpp(argument_name: str) -> str:
 def generate_hash_check_cpp(file: str, function_name: str, argument_name: str) -> str:
     return (
         f'{ASSERT_NAME_C}({generate_hash_call_cpp(argument_name)} == {generate_hash_variable_name_cpp(argument_name)}, '
-        f'"File {file}, function {function_name}: input parameter {argument_name} changed");')
+        f'"File {file}, function {function_name}: input argument {argument_name} changed");')
 
 
 def apply_edits(source: str, edits: list[Edit]) -> str:
@@ -383,11 +383,29 @@ def generate_user_type_assignment_cpp(argument_name: str, type_name: str) -> str
     return f'{argument_name}.DBG_INFO = {generate_user_type_string_cpp(type_name)} + {argument_name}.DBG_INFO;'
 
 
-def generate_user_type_check_cpp(function_name: str, file: str, argument_name: str, type_name: str) -> str:
-    return (f'{ASSERT_NAME_C}('
-            f'{argument_name}.DBG_INFO.find({generate_user_type_string_cpp(type_name)}) != std::string::npos, '
-            f'("File {file}, function {function_name}: expected {argument_name} type to have user type {type_name}'
-            f'\\nDBG_INFO="+{argument_name}.DBG_INFO).c_str());')
+def generate_user_type_check_cpp(
+        function_name: str,
+        file: str,
+        line: int,
+        argument_name: str,
+        type_name: str) -> str:
+    error_message_cpp = '"'
+    error_message_cpp += '\\n'.join([
+        'error_code=SEM##',
+        f'where={file}:{line} {function_name}',
+        f'argument_name={argument_name}',
+        f'expected_type={type_name}',
+        f'message=wrong or missing user type',
+    ])
+    error_message_cpp += f'\\ndbg_info="+{argument_name}.DBG_INFO'
+    error_message_cpp = f'({error_message_cpp}).c_str()'
+
+    return ''.join([
+        f'{ASSERT_NAME_C}(',
+        f'{argument_name}.DBG_INFO.find({generate_user_type_string_cpp(type_name)}) != std::string::npos, ',
+        error_message_cpp,
+        ');'
+    ])
 
 
 def generate_copy_of_function_cpp(function: Function, source: str) -> str:
@@ -399,16 +417,16 @@ def generate_deserialization_check_cpp(
         function_name: str,
         file: str,
         line: int,
-        serialized_parameter_name: str,
-        serialized_parameter_type: str,
-        buffer_parameter_name: str,
+        serialized_argument_name: str,
+        serialized_argument_type: str,
+        buffer_argument_name: str,
         serialized_size_function_name: str,
         serialize_function_name: str,
         deserialize_function_name: str,
 ) -> list[str]:
     size_variable_name = '_size'
     buffer_variable_name = '_buf'
-    deserialized_parameter_name = '_deserialized'
+    deserialized_argument_name = '_deserialized'
 
     error_message_cpp = '"' + '\\n'.join([
         'error_code=SEM##',
@@ -418,12 +436,12 @@ def generate_deserialization_check_cpp(
 
     return [
         '{',
-        f'    auto {size_variable_name} = {serialized_size_function_name}({serialized_parameter_name});',
-        f'    {serialized_parameter_type} {deserialized_parameter_name};',
-        f'    {deserialize_function_name}({deserialized_parameter_name}, {buffer_parameter_name});',
+        f'    auto {size_variable_name} = {serialized_size_function_name}({serialized_argument_name});',
+        f'    {serialized_argument_type} {deserialized_argument_name};',
+        f'    {deserialize_function_name}({deserialized_argument_name}, {buffer_argument_name});',
         f'    std::vector<uint8_t> {buffer_variable_name}({size_variable_name});',
-        f'    {serialize_function_name}({deserialized_parameter_name}, {buffer_variable_name}.data());',
-        f'    {ASSERT_NAME_C}(0 == memcmp({buffer_variable_name}.data(), {buffer_parameter_name}, {size_variable_name}), {error_message_cpp});',
+        f'    {serialize_function_name}({deserialized_argument_name}, {buffer_variable_name}.data());',
+        f'    {ASSERT_NAME_C}(0 == memcmp({buffer_variable_name}.data(), {buffer_argument_name}, {size_variable_name}), {error_message_cpp});',
         '}'
     ]
 
@@ -625,6 +643,7 @@ def instrument_cpp(
 
                         type_checks.append(generate_user_type_check_cpp(
                             file=file,
+                            line=function.location.line,
                             function_name=function.name,
                             argument_name=argument_name,
                             type_name=type_name
@@ -660,9 +679,9 @@ def instrument_cpp(
                             file=file,
                             line=line,
                             function_name=function.name,
-                            serialized_parameter_name=function.arguments[0].name,
-                            serialized_parameter_type=function.arguments[0].type,
-                            buffer_parameter_name=function.arguments[1].name,
+                            serialized_argument_name=function.arguments[0].name,
+                            serialized_argument_type=function.arguments[0].type,
+                            buffer_argument_name=function.arguments[1].name,
                             serialized_size_function_name=serialized_size_function.name,
                             serialize_function_name=serialize_function_nonrec_name,
                             deserialize_function_name=deserialize_function.name,
@@ -780,7 +799,6 @@ def run(
         atomic_ddg: Path,
         standalone: bool = True,
 ) -> None:
-
     if output_dir.exists() and not output_dir.is_dir():
         raise NotADirectoryError()
     output_dir.mkdir(parents=True, exist_ok=True)
