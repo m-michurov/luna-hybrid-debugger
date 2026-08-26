@@ -359,10 +359,23 @@ def generate_hash_initialization_cpp(argument_name: str) -> str:
     return f'auto const {generate_hash_variable_name_cpp(argument_name)} = {generate_hash_call_cpp(argument_name)};'
 
 
-def generate_hash_check_cpp(file: str, function_name: str, argument_name: str) -> str:
-    return (
-        f'{ASSERT_NAME_C}({generate_hash_call_cpp(argument_name)} == {generate_hash_variable_name_cpp(argument_name)}, '
-        f'"File {file}, function {function_name}: input argument {argument_name} changed");')
+def generate_hash_check_cpp(
+        function_name: str,
+        file: str,
+        line: int,
+        argument_name: str) -> str:
+    error_message_cpp = '"' + '\\n'.join([
+        'error_code=SEM##',
+        f'where={file}:{line} {function_name}',
+        f'argument_name={argument_name}',
+        f'message=input argument changed',
+    ]) + '"'
+
+    return ''.join([
+        f'{ASSERT_NAME_C}({generate_hash_call_cpp(argument_name)}=={generate_hash_variable_name_cpp(argument_name)}, ',
+        error_message_cpp,
+        ');'
+    ])
 
 
 def apply_edits(source: str, edits: list[Edit]) -> str:
@@ -721,6 +734,7 @@ def instrument_cpp(
             hash_initializations.append(generate_hash_initialization_cpp(argument_name))
             hash_checks.append(generate_hash_check_cpp(
                 file=file,
+                line=function.location.line,
                 function_name=function.name,
                 argument_name=argument_name
             ))
