@@ -13,7 +13,7 @@ from typing import Final, TypeAlias
 import click
 from clang import cindex
 
-from adapt_file_paths import C_HASH_HEADER_PATH, C_ASSERT_HEADER_PATH, C_ASSERT_CPP_PATH
+from adapt_file_paths import C_HASH_HEADER_PATH, C_ASSERT_HEADER_PATH, REQUIRED_FILE_PATHS
 from adapt_function_names import HASH_NAME_C, ASSERT_NAME_C
 
 cindex.Config.set_library_file('/usr/lib/llvm-18/lib/libclang.so')  # adjust path
@@ -559,7 +559,7 @@ def instrument_cpp(
            and function.body is not None
     ]
 
-    if data_dependencies_path is not None:
+    if data_dependencies_path is not None and data_dependencies_path.exists():
         data_dependencies = load_data_dependencies(data_dependencies_path, functions)
     else:
         data_dependencies = {}
@@ -712,14 +712,12 @@ def instrument_cpp(
     dst_cpp_path.write_text(source, encoding='utf-8')
 
     print(f'Generated {generated_type_assignments_count} type initializations.')
-    print(f'Generated {generated_type_checks_count} type checks (skipped {skipped_redundant_type_checks_count} redundant checks).')
+    print(
+        f'Generated {generated_type_checks_count} type checks (skipped {skipped_redundant_type_checks_count} redundant checks).')
     print(f'Generated {generated_hash_initializations_count} hash initializations.')
     print(f'Generated {generated_hash_checks_count} hash checks.')
     print(f'Generated {generated_deserialization_checks_count} deserialization checks.')
     print(f'See {dst_cpp_path}.')
-
-    if generated_type_checks_count > 0:
-        print(f'Type checks generated, debug mode (luna -g) required to run instrumented program.')
 
 
 @click.command()
@@ -740,46 +738,59 @@ def instrument_cpp(
     help='Directory for program output.',
     type=click.Path(
         file_okay=False,
-        resolve_path=False,
+        resolve_path=True,
         path_type=Path,
     )
 )
 @click.option(
     '--atomic-ddg',
     required=False,
-    show_default=True,
-    default=None,
     help='A JSON file containing information about data dependencies between atomic CF arguments.',
     type=click.Path(
         dir_okay=False,
-        resolve_path=False,
+        resolve_path=True,
         path_type=Path,
     )
 )
 def main(
         cpp_path: Path,
         output_dir: Path,
-        atomic_ddg: Path | None = None
+        atomic_ddg: Path | None = None,
 ) -> None:
-    if not output_dir.is_absolute():
-        output_dir = cpp_path.parent / output_dir
-    if atomic_ddg is not None and not atomic_ddg.is_absolute():
-        atomic_ddg = cpp_path.parent / atomic_ddg
+    run(
+        cpp_path=cpp_path,
+        output_dir=output_dir,
+        atomic_ddg=atomic_ddg,
+    )
+
+
+def run(
+        cpp_path: Path,
+        output_dir: Path,
+        atomic_ddg: Path,
+        standalone: bool = True,
+) -> None:
+
     if output_dir.exists() and not output_dir.is_dir():
         raise NotADirectoryError()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    project_folder = cpp_path.parent
-    shutil.copytree(
-        src=project_folder,
-        dst=output_dir,
-        ignore=lambda _1, _2: [output_dir.name],
-        dirs_exist_ok=True
-    )
-    for path in (C_HASH_HEADER_PATH, C_ASSERT_HEADER_PATH, C_ASSERT_CPP_PATH):
-        shutil.copyfile(src=path, dst=output_dir / path.name)
+    if standalone:
+        project_path = cpp_path.parent
+        shutil.copytree(
+            src=project_path,
+            dst=output_dir,
+            ignore=lambda _1, _2: [output_dir.name],
+            dirs_exist_ok=True
+        )
+
+        for path in REQUIRED_FILE_PATHS:
+            shutil.copyfile(src=path, dst=output_dir / path.name)
 
     instrument_cpp(cpp_path, output_dir, atomic_ddg)
+
+    if not standalone:
+        return
 
     print('Run modified program with:')
     print(f'cd {output_dir} ;', end=' ')
