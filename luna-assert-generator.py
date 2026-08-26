@@ -83,7 +83,8 @@ def main(
     found_errors = resolve_relative_to(found_errors, project_path)
     atomic_ddg = resolve_relative_to(atomic_ddg, project_path)
 
-    shutil.rmtree(output_dir, ignore_errors=False)
+    if output_dir.exists():
+        shutil.rmtree(output_dir, ignore_errors=False)
     output_dir.mkdir(parents=True, exist_ok=False)
 
     for path in REQUIRED_FILE_PATHS:
