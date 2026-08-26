@@ -398,6 +398,7 @@ def generate_copy_of_function_cpp(function: Function, source: str) -> str:
 def generate_deserialization_check_cpp(
         function_name: str,
         file: str,
+        line: int,
         serialized_parameter_name: str,
         serialized_parameter_type: str,
         buffer_parameter_name: str,
@@ -408,6 +409,13 @@ def generate_deserialization_check_cpp(
     size_variable_name = '_size'
     buffer_variable_name = '_buf'
     deserialized_parameter_name = '_deserialized'
+
+    error_message_cpp = '"' + '\\n'.join([
+        'error_code=SEM##',
+        f'where={file}:{line} {function_name}',
+        f'message=serialized buffers differ after deserialization',
+    ]) + '"'
+
     return [
         '{',
         f'    auto {size_variable_name} = {serialized_size_function_name}({serialized_parameter_name});',
@@ -415,7 +423,7 @@ def generate_deserialization_check_cpp(
         f'    {deserialize_function_name}({deserialized_parameter_name}, {buffer_parameter_name});',
         f'    std::vector<uint8_t> {buffer_variable_name}({size_variable_name});',
         f'    {serialize_function_name}({deserialized_parameter_name}, {buffer_variable_name}.data());',
-        f'    {ASSERT_NAME_C}(0 == memcmp({buffer_variable_name}.data(), {buffer_parameter_name}, {size_variable_name}), "File {file}, function {function_name}: serialized buffers differ after deserialization");',
+        f'    {ASSERT_NAME_C}(0 == memcmp({buffer_variable_name}.data(), {buffer_parameter_name}, {size_variable_name}), {error_message_cpp});',
         '}'
     ]
 
@@ -589,6 +597,7 @@ def instrument_cpp(
         generated_indent = 4 + closing_bracket_indent
 
         file = Path(str(function.location.file)).name
+        line = function.location.line
 
         # Pragma-controlled code generation
         body_start = function.body.extent.start.offset
@@ -649,6 +658,7 @@ def instrument_cpp(
                         position=body_end - 1,
                         lines=generate_deserialization_check_cpp(
                             file=file,
+                            line=line,
                             function_name=function.name,
                             serialized_parameter_name=function.arguments[0].name,
                             serialized_parameter_type=function.arguments[0].type,
