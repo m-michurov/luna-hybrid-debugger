@@ -354,6 +354,8 @@ def generate_loop_assertions(
         init_last = init_loop['last']
 
         for body, use_loop in name_use_loops:
+            use_loop_position = use_loop['begin']
+
             use_first = use_loop['first']
             use_last = use_loop['last']
 
@@ -377,6 +379,16 @@ def generate_loop_assertions(
                 'op_pos': 0
             }
 
+            error_message = '\n'.join([
+                'error_code=SEM##',
+                f'base_name={base_name}',
+                f'where={ti.file_name(use_loop_position)}:{ti.line_number(use_loop_position)} for',
+                f'init_first={ja_expression_to_str(init_first)}',
+                f'init_last={ja_expression_to_str(init_last)}',
+                f'use_first={ja_expression_to_str(use_first)}',
+                f'use_last={ja_expression_to_str(use_last)}',
+            ])
+
             asserts_ja = [
                 {
                     'type': 'exec',
@@ -387,7 +399,7 @@ def generate_loop_assertions(
                         {
                             'is_expr': True,
                             'type': 'sconst',
-                            'value': f'{ja_expression_to_str(bounds_check_ja)} (init bounds for {base_name})'
+                            'value': error_message
                         }
                     ],
                     'rules': [],
@@ -401,7 +413,7 @@ def generate_loop_assertions(
     return assertions_count, ja_with_assertions
 
 
-def generate_init_condition_assertions(ja: dict) -> tuple[int, dict]:
+def generate_init_condition_assertions(ja: dict, ti: TextInfo) -> tuple[int, dict]:
     assertions_count = 0
 
     ja_with_assertions = ja
@@ -431,9 +443,17 @@ def generate_init_condition_assertions(ja: dict) -> tuple[int, dict]:
         _, single_init_condition = conditional_single_inits[name][0]
         assert single_init_condition['type'] == 'if'
 
+        if_position = single_init_condition['begin']
         init_condition = single_init_condition['cond']
 
         for body in use_bodies:
+            error_message = '\n'.join([
+                'error_code=SEM##',
+                f'name={name}',
+                f'where={ti.file_name(if_position)}:{ti.line_number(if_position)} if',
+                f'condition={ja_expression_to_str(init_condition)}',
+            ])
+
             asserts_ja = [
                 {
                     'type': 'exec',
@@ -444,7 +464,7 @@ def generate_init_condition_assertions(ja: dict) -> tuple[int, dict]:
                         {
                             'is_expr': True,
                             'type': 'sconst',
-                            'value': f'{ja_expression_to_str(init_condition)} (condition to initialize {name})'
+                            'value': error_message
                         }
                     ],
                     'rules': [],
@@ -548,13 +568,16 @@ def run(
     if found_errors.exists():
         print(f'Attempting to use {found_errors} to only generate necessary checks.')
 
+    text_info = TextInfo(json.loads(build_dir.joinpath('preprocessed.fa.ti').read_text(encoding='utf-8')))
+
     loop_assertions_count, ja_with_assertions = generate_loop_assertions(
         ja=json.loads(build_dir.joinpath('program_foreign.ja').read_text(encoding='utf-8')),
-        ti=TextInfo(json.loads(build_dir.joinpath('preprocessed.fa.ti').read_text(encoding='utf-8'))),
+        ti=text_info,
         found_errors=json.loads(found_errors.read_text(encoding='utf-8')) if found_errors.exists() else None,
     )
     condition_assertions_count, ja_with_assertions = generate_init_condition_assertions(
-        ja_with_assertions,
+        ja=ja_with_assertions,
+        ti=text_info
     )
 
     assertions_count = loop_assertions_count + condition_assertions_count
