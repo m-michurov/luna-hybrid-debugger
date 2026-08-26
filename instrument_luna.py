@@ -488,7 +488,7 @@ def main(
         project_path: Path,
         build_dir: Path,
         output_dir: Path,
-        found_errors: Path | None
+        found_errors: Path
 ) -> None:
     luna_ja_only_path = Path(__file__).parent.joinpath('luna_ja_only', 'luna').resolve()
     luna_after_ja_path = Path(__file__).parent.joinpath('luna_after_ja', 'luna').resolve()
