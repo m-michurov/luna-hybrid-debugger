@@ -584,7 +584,8 @@ def run(
     print(f'Generated {assertions_count} assertion(s).')
     if assertions_count <= 0:
         print('Program was not modified.')
-        return
+        if standalone:
+            return
 
     if standalone:
         shutil.copytree(
