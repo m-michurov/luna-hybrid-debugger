@@ -1,2 +1,2 @@
-clang==21.1.7
+clang==18.1.8
 click==8
