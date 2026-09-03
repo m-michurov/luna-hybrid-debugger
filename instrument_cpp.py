@@ -363,13 +363,19 @@ def generate_hash_check_cpp(
         function_name: str,
         file: str,
         line: int,
-        argument_name: str) -> str:
-    error_message_cpp = '"' + '\\n'.join([
+        argument_name: str
+) -> str:
+    error_message_cpp = 'std::string("'
+    error_message_cpp += '\\n'.join([
         'error_code=SEM##',
         f'where={file}:{line} {function_name}',
         f'argument_name={argument_name}',
         f'message=input argument changed',
-    ]) + '"'
+    ])
+    error_message_cpp += '")'
+    error_message_cpp += f' + "\\nluna_df_id=" + {argument_name}.dbg_id_str()'
+    error_message_cpp += f' + "\\nluna_call_stack=" + {argument_name}.dbg_call_stack_str()'
+    error_message_cpp = f'({error_message_cpp}).c_str()'
 
     return ''.join([
         f'{ASSERT_NAME_C}({generate_hash_call_cpp(argument_name)}=={generate_hash_variable_name_cpp(argument_name)}, ',
@@ -388,12 +394,8 @@ def apply_edits(source: str, edits: list[Edit]) -> str:
     return source
 
 
-def generate_user_type_string_cpp(type_name: str) -> str:
-    return f'"adapt_user_type={type_name};"'
-
-
 def generate_user_type_assignment_cpp(argument_name: str, type_name: str) -> str:
-    return f'{argument_name}.DBG_INFO = {generate_user_type_string_cpp(type_name)} + {argument_name}.DBG_INFO;'
+    return f'{argument_name}.dbg_set_user_type("{type_name}");'
 
 
 def generate_user_type_check_cpp(
@@ -402,7 +404,7 @@ def generate_user_type_check_cpp(
         line: int,
         argument_name: str,
         type_name: str) -> str:
-    error_message_cpp = '"'
+    error_message_cpp = 'std::string("'
     error_message_cpp += '\\n'.join([
         'error_code=SEM##',
         f'where={file}:{line} {function_name}',
@@ -410,12 +412,16 @@ def generate_user_type_check_cpp(
         f'expected_type={type_name}',
         f'message=wrong or missing user type',
     ])
-    error_message_cpp += f'\\ndbg_info="+{argument_name}.DBG_INFO'
+    error_message_cpp += '")'
+    error_message_cpp += f' + "\\nluna_df_id=" + {argument_name}.dbg_id_str()'
+    error_message_cpp += f' + "\\nluna_call_stack=" + {argument_name}.dbg_call_stack_str()'
+    error_message_cpp += f' + "\\nadapt_user_type=" + {argument_name}.dbg_user_type_str()'
+    error_message_cpp += f' + "\\nluna_type=" + {argument_name}.dbg_luna_type_str()'
     error_message_cpp = f'({error_message_cpp}).c_str()'
 
     return ''.join([
         f'{ASSERT_NAME_C}(',
-        f'{argument_name}.DBG_INFO.find({generate_user_type_string_cpp(type_name)}) != std::string::npos, ',
+        f'{argument_name}.dbg_user_type_str() == "{type_name}", ',
         error_message_cpp,
         ');'
     ])
