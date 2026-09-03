@@ -394,6 +394,7 @@ def apply_edits(source: str, edits: list[Edit]) -> str:
     return source
 
 
+# TODO also save init call stack?
 def generate_user_type_assignment_cpp(argument_name: str, type_name: str) -> str:
     return f'{argument_name}.dbg_set_user_type("{type_name}");'
 
