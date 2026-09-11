@@ -1,4 +1,6 @@
 import shutil
+import subprocess
+import sys
 from pathlib import Path
 
 import click
@@ -68,12 +70,18 @@ from instrument_luna import run as instrument_luna
         path_type=Path,
     )
 )
+@click.option(
+    '--instrument-only',
+    is_flag=True,
+    help='Generate runtime checks and print the command to run the modified program.'
+)
 def main(
         project_path: Path,
         output_dir: Path,
         build_dir: Path,
         found_errors: Path,
-        atomic_ddg: Path | None = None
+        atomic_ddg: Path | None = None,
+        instrument_only: bool = False
 ) -> None:
     assert_generator_home = Path(__file__).parent
     luna_after_ja_path = resolve_relative_to(Path('luna_after_ja', 'luna'), assert_generator_home)
@@ -109,20 +117,38 @@ def main(
         standalone=False,
     )
 
-    print('Run modified program with:')
-    print(f'cd {output_dir} ;', end=' ')
-    print(f'rm -f .adapt_error_*.dat ;', end=' ')
-    print(
+    run_command = ' '.join([
+        f'cd {output_dir} ;',
+        f'rm -f .adapt_error_*.dat ;',
         f'{luna_after_ja_path}',
         '-g',
         f'--build-dir={str(build_dir)}',
         '--no-cleanup',
         *(str(it.resolve()) for it in output_dir.iterdir() if it.suffix == '.fa'),
         ';',
-        sep=' ',
-        end=' '
-    )
-    print(f'cd -')
+        f'cd -'
+    ])
+
+    if instrument_only:
+        print('Run modified program with:')
+        print(run_command)
+        return
+
+    try:
+        print('Running modified program:')
+
+        p = subprocess.run(
+            args=run_command,
+            cwd=project_path,
+            capture_output=True,
+            check=True,
+            shell=True,
+        )
+        print(p.stdout.decode())
+        print(p.stderr.decode())
+    except subprocess.CalledProcessError as e:
+        print(e.stderr.decode(), file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == '__main__':
