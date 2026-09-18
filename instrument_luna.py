@@ -478,16 +478,25 @@ def generate_init_condition_assertions(ja: dict, ti: TextInfo) -> tuple[int, dic
     return assertions_count, ja_with_assertions
 
 
-@click.command()
+@click.command(
+    context_settings=dict(
+        ignore_unknown_options=True,
+    )
+)
 @click.argument(
-    'project-path',
+    'fa-path',
     nargs=1,
     type=click.Path(
-        dir_okay=True,
-        file_okay=False,
+        dir_okay=False,
+        file_okay=True,
         resolve_path=True,
         path_type=Path,
     )
+)
+@click.argument(
+    'fa-args',
+    nargs=-1,
+    type=click.UNPROCESSED
 )
 @click.option(
     '--build-dir',
@@ -524,13 +533,15 @@ def generate_init_condition_assertions(ja: dict, ti: TextInfo) -> tuple[int, dic
     )
 )
 def main(
-        project_path: Path,
+        fa_path: Path,
+        fa_args: list[str],
         build_dir: Path,
         output_dir: Path,
         found_errors: Path | None = None,
 ) -> None:
     run(
-        project_path=project_path,
+        fa_path=fa_path,
+        fa_args=fa_args,
         build_dir=build_dir,
         output_dir=output_dir,
         found_errors=found_errors,
@@ -538,7 +549,8 @@ def main(
 
 
 def run(
-        project_path: Path,
+        fa_path: Path,
+        fa_args: list[str],
         build_dir: Path,
         output_dir: Path,
         found_errors: Path | None = None,
@@ -546,6 +558,8 @@ def run(
 ) -> None:
     luna_ja_only_path = Path(__file__).parent.joinpath('luna_ja_only', 'luna').resolve()
     luna_after_ja_path = Path(__file__).parent.joinpath('luna_after_ja', 'luna').resolve()
+
+    project_path = fa_path.parent
 
     try:
         subprocess.run(
@@ -555,7 +569,8 @@ def run(
                 '-q',
                 '--compile-only',
                 f'--build-dir={str(build_dir)}',
-                *[it.name for it in project_path.iterdir() if it.suffix == '.fa'],
+                fa_path,
+                *fa_args
             ],
             cwd=project_path,
             capture_output=True,
@@ -604,22 +619,25 @@ def run(
     for path in fa_paths:
         shutil.copyfile(src=path, dst=output_dir / path.name)
 
+    instrumented_fa_path = output_dir / fa_path.name
+
     if not standalone:
         return
 
-    print('Run modified program with:')
-    print(f'cd {output_dir} ;', end=' ')
-    print(f'rm -f .adapt_error_*.dat ;', end=' ')
-    print(
+    run_command = ' '.join([
+        f'cd {output_dir} ;',
+        f'rm -f .adapt_error_*.dat ;',
         f'{luna_after_ja_path.resolve()}',
         f'--build-dir={str(build_dir)}',
         '--no-cleanup',
-        *(str(it.resolve()) for it in output_dir.iterdir() if it.suffix == '.fa'),
+        str(instrumented_fa_path),
+        *fa_args,
         ';',
-        sep=' ',
-        end=' '
-    )
-    print(f'cd -')
+        f'cd $OLDPWD'
+    ])
+
+    print('Run modified program with:')
+    print(run_command)
 
 
 if __name__ == '__main__':

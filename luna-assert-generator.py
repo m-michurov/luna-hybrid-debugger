@@ -11,16 +11,25 @@ from instrument_cpp import run as instrument_cpp
 from instrument_luna import run as instrument_luna
 
 
-@click.command()
+@click.command(
+    context_settings=dict(
+        ignore_unknown_options=True,
+    )
+)
 @click.argument(
-    'project-path',
+    'fa-path',
     nargs=1,
     type=click.Path(
-        dir_okay=True,
-        file_okay=False,
+        dir_okay=False,
+        file_okay=True,
         resolve_path=True,
         path_type=Path,
     )
+)
+@click.argument(
+    'fa-args',
+    nargs=-1,
+    type=click.UNPROCESSED
 )
 @click.option(
     '--build-dir',
@@ -76,7 +85,8 @@ from instrument_luna import run as instrument_luna
     help='Generate runtime checks and print the command to run the modified program.'
 )
 def main(
-        project_path: Path,
+        fa_path: Path,
+        fa_args: list[str],
         output_dir: Path,
         build_dir: Path,
         found_errors: Path,
@@ -85,6 +95,8 @@ def main(
 ) -> None:
     assert_generator_home = Path(__file__).parent
     luna_after_ja_path = resolve_relative_to(Path('luna_after_ja', 'luna'), assert_generator_home)
+
+    project_path = fa_path.parent
 
     output_dir = resolve_relative_to(output_dir, project_path)
     build_dir = resolve_relative_to(build_dir, output_dir)
@@ -110,12 +122,15 @@ def main(
 
     print(f'Instrumenting LuNA code in "{project_path}"...')
     instrument_luna(
-        project_path=project_path,
+        fa_path=fa_path,
+        fa_args=fa_args,
         build_dir=build_dir,
         output_dir=output_dir,
         found_errors=found_errors,
         standalone=False,
     )
+
+    instrumented_fa_path = output_dir / fa_path.name
 
     run_command = ' '.join([
         f'cd {output_dir} ;',
@@ -124,9 +139,10 @@ def main(
         '-g',
         f'--build-dir={str(build_dir)}',
         '--no-cleanup',
-        *(str(it.resolve()) for it in output_dir.iterdir() if it.suffix == '.fa'),
+        str(instrumented_fa_path),
+        *fa_args,
         ';',
-        f'cd -'
+        f'cd $OLDPWD'
     ])
 
     if instrument_only:
