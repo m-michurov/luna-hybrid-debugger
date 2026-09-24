@@ -626,7 +626,7 @@ def run(
 
     run_command = ' '.join([
         f'cd {output_dir} ;',
-        f'rm -f .adapt_error_*.dat ;',
+        f'rm -f adapt_error_*.dat ;',
         f'{luna_after_ja_path.resolve()}',
         f'--build-dir={str(build_dir)}',
         '--no-cleanup',

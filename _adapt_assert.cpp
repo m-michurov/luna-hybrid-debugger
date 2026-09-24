@@ -30,7 +30,7 @@ namespace {
         const auto n = counter.fetch_add(1, std::memory_order_relaxed);
 
         std::ostringstream ss;
-        ss << ".adapt_error_"
+        ss << "adapt_error_"
            << std::hex
            << std::setw(16) << std::setfill('0') << id0
            << std::setw(16) << std::setfill('0') << id1

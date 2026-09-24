@@ -2,6 +2,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
+from typing import Final
 
 import click
 
@@ -9,6 +10,9 @@ from adapt_file_paths import REQUIRED_FILE_PATHS
 from path_utility import resolve_relative_to
 from instrument_cpp import run as instrument_cpp
 from instrument_luna import run as instrument_luna
+
+
+OPTION_OUTPUT_DIR: Final[str] = '--output-dir'
 
 
 @click.command(
@@ -36,7 +40,7 @@ from instrument_luna import run as instrument_luna
     required=False,
     show_default=True,
     default=Path('build'),
-    help='Directory for build files.',
+    help=f'Directory for build files. If not absolute, resolved relative to {OPTION_OUTPUT_DIR}.',
     type=click.Path(
         file_okay=False,
         resolve_path=False,
@@ -44,7 +48,7 @@ from instrument_luna import run as instrument_luna
     )
 )
 @click.option(
-    '--output-dir',
+    OPTION_OUTPUT_DIR,
     required=False,
     show_default=True,
     default=Path('instrumented'),
@@ -134,7 +138,7 @@ def main(
 
     run_command = ' '.join([
         f'cd {output_dir} ;',
-        f'rm -f .adapt_error_*.dat ;',
+        f'rm -f adapt_error_*.dat ;',
         f'{luna_after_ja_path}',
         '-g',
         f'--build-dir={str(build_dir)}',

@@ -843,7 +843,7 @@ def run(
 
     print('Run modified program with:')
     print(f'cd {output_dir} ;', end=' ')
-    print(f'rm -f .adapt_error_*.dat ;', end=' ')
+    print(f'rm -f adapt_error_*.dat ;', end=' ')
     print(
         'luna',
         '-g',
