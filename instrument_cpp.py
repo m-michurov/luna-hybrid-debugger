@@ -638,12 +638,32 @@ def instrument_cpp(
         file = Path(str(function.location.file)).name
         line = function.location.line
 
-        # Pragma-controlled code generation
         body_start = function.body.extent.start.offset
         body_end = function.body.extent.end.offset - closing_bracket_indent
 
         input_args, output_args = input_output_args(function)
 
+        # Unconditional hash checks
+        hash_initializations = []
+        hash_checks = []
+        for argument_name in input_args:
+            hash_initializations.append(generate_hash_initialization_cpp(argument_name))
+            hash_checks.append(generate_hash_check_cpp(
+                file=file,
+                line=function.location.line,
+                function=generate_signature_cpp(function),
+                argument_name=argument_name
+            ))
+
+        generated_hash_checks_count += len(hash_checks)
+        generated_hash_initializations_count += len(hash_initializations)
+
+        if hash_initializations:
+            edits.append(Edit.from_lines(position=body_start + 1, lines=hash_initializations, indent=generated_indent))
+        if hash_checks:
+            edits.append(Edit.from_lines(position=body_end - 1, lines=hash_checks, indent=generated_indent))
+
+        # Pragma-controlled code generation
         type_checks = []
         type_assignments = []
 
@@ -734,26 +754,6 @@ def instrument_cpp(
             edits.append(Edit.from_lines(position=body_start + 1, lines=type_checks, indent=generated_indent))
         if type_assignments:
             edits.append(Edit.from_lines(position=body_start + 1, lines=type_assignments, indent=generated_indent))
-
-        # Unconditional hash checks
-        hash_initializations = []
-        hash_checks = []
-        for argument_name in input_args:
-            hash_initializations.append(generate_hash_initialization_cpp(argument_name))
-            hash_checks.append(generate_hash_check_cpp(
-                file=file,
-                line=function.location.line,
-                function=generate_signature_cpp(function),
-                argument_name=argument_name
-            ))
-
-        generated_hash_checks_count += len(hash_checks)
-        generated_hash_initializations_count += len(hash_initializations)
-
-        if hash_initializations:
-            edits.append(Edit.from_lines(position=body_start + 1, lines=hash_initializations, indent=generated_indent))
-        if hash_checks:
-            edits.append(Edit.from_lines(position=body_end - 1, lines=hash_checks, indent=generated_indent))
 
     print(f'Applying {len(edits)} edits')
 
