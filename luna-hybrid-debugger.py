@@ -88,6 +88,18 @@ OPTION_OUTPUT_DIR: Final[str] = '--output-dir'
     is_flag=True,
     help='Generate runtime checks and print the command to run the modified program.'
 )
+@click.option(
+    '--errors-file',
+    required=False,
+    show_default=True,
+    default=None,
+    help='Append errors list to existing file or create a new errors file.',
+    type=click.Path(
+        dir_okay=False,
+        resolve_path=True,
+        path_type=Path,
+    )
+)
 def main(
         fa_path: Path,
         fa_args: list[str],
@@ -95,7 +107,8 @@ def main(
         build_dir: Path,
         found_errors: Path,
         atomic_ddg: Path | None = None,
-        instrument_only: bool = False
+        instrument_only: bool = False,
+        errors_file: Path | None = None,
 ) -> None:
     assert_generator_home = Path(__file__).parent
     luna_after_ja_path = resolve_relative_to(Path('luna_after_ja', 'luna'), assert_generator_home)
@@ -136,6 +149,12 @@ def main(
 
     instrumented_fa_path = output_dir / fa_path.name
 
+    python_path = Path(__file__).parent / '.venv' / 'bin' / 'python'
+    format_errors_path = Path(__file__).parent / 'format-errors.py'
+
+    if errors_file is None:
+        errors_file = project_path / 'errors.json'
+
     run_command = ' '.join([
         f'cd {output_dir} ;',
         f'rm -f adapt_error_*.dat ;',
@@ -145,6 +164,8 @@ def main(
         '--no-cleanup',
         str(instrumented_fa_path),
         *fa_args,
+        ';',
+        f'{python_path} {format_errors_path} --errors-file {str(errors_file)} {str(output_dir)}',
         ';',
         f'cd $OLDPWD'
     ])
