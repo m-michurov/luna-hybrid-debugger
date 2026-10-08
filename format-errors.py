@@ -33,6 +33,7 @@ def find_initializers(df_id: Id, cf_info: dict[Id, CF]) -> set[Id]:
     }
 
 
+# TODO format name to remove excessive info such as function parameters
 def call_stack_readable_to_json(call_stack: list[str]) -> list[dict[str, str | int]]:
     # parsing "code line (maybe with spaces) [file:line]"
     result = []
@@ -159,11 +160,11 @@ def main(
                 adapt_errors.append({
                     'error_code': error_code,
                     'details': {
-                        'where': [{
+                        'where': {
                             'file': cpp_file,
                             'line': cpp_line,
                             'name': cpp_function_name,
-                        }],
+                        },
                         'argument_name': cpp_argument_name,
                     }
                 })
@@ -221,11 +222,11 @@ def main(
                 adapt_errors.append({
                     'error_code': error_code,
                     'details': {
-                        'where': [{
+                        'where': {
                             'file': cpp_file,
                             'line': cpp_line,
                             'name': cpp_function_name,
-                        }],
+                        },
                         'type': cpp_type,
                     }
                 })
