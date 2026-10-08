@@ -42,7 +42,7 @@ def call_stack_readable_to_json(call_stack: list[str]) -> list[dict[str, str | i
         result.append({
             'file': file,
             'line': int(line_str),
-            'name': code_line,  # TODO also parse the code line and extract the name
+            'name': code_line,
         })
     return result
 
