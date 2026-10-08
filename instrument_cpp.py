@@ -15,6 +15,7 @@ from clang import cindex
 
 from adapt_file_paths import C_HASH_HEADER_PATH, C_ASSERT_HEADER_PATH, REQUIRED_FILE_PATHS
 from adapt_function_names import HASH_NAME_C, ASSERT_NAME_C
+import error_codes
 
 cindex.Config.set_library_file('/usr/lib/llvm-18/lib/libclang.so')  # adjust path
 
@@ -360,21 +361,19 @@ def generate_hash_initialization_cpp(argument_name: str) -> str:
 
 
 def generate_hash_check_cpp(
-        function_name: str,
+        function: str,
         file: str,
         line: int,
         argument_name: str
 ) -> str:
     error_message_cpp = 'std::string("'
     error_message_cpp += '\\n'.join([
-        'error_code=SEM##',
-        f'where={file}:{line} {function_name}',
-        f'argument_name={argument_name}',
+        f'error_code={error_codes.ERROR_CPP_INPUT_ARGUMENT_CHANGED}',
+        f'cpp_where={file} {line} {function}',
+        f'cpp_argument_name={argument_name}',
         f'message=input argument changed',
     ])
     error_message_cpp += '")'
-    error_message_cpp += f' + "\\nluna_df_id=" + {argument_name}.dbg_id_str()'
-    error_message_cpp += f' + "\\nluna_call_stack=" + {argument_name}.dbg_call_stack_str()'
     error_message_cpp = f'({error_message_cpp}).c_str()'
 
     return ''.join([
@@ -400,24 +399,24 @@ def generate_user_type_assignment_cpp(argument_name: str, type_name: str) -> str
 
 
 def generate_user_type_check_cpp(
-        function_name: str,
+        function: str,
         file: str,
         line: int,
         argument_name: str,
         type_name: str) -> str:
     error_message_cpp = 'std::string("'
     error_message_cpp += '\\n'.join([
-        'error_code=SEM##',
-        f'where={file}:{line} {function_name}',
-        f'argument_name={argument_name}',
-        f'expected_type={type_name}',
+        f'error_code={error_codes.ERROR_CPP_USER_TYPE_MISMATCH}',
+        f'cpp_where={file} {line} {function}',
+        f'cpp_argument_name={argument_name}',
+        f'expected_user_type={type_name}',
         f'message=wrong or missing user type',
     ])
     error_message_cpp += '")'
     error_message_cpp += f' + "\\nluna_df_id=" + {argument_name}.dbg_id_str()'
     error_message_cpp += f' + "\\nluna_call_stack=" + {argument_name}.dbg_call_stack_str()'
-    error_message_cpp += f' + "\\nadapt_user_type=" + {argument_name}.dbg_user_type_str()'
-    error_message_cpp += f' + "\\nluna_type=" + {argument_name}.dbg_luna_type_str()'
+    error_message_cpp += f' + "\\ngot_user_type=" + {argument_name}.dbg_user_type_str()'
+    error_message_cpp += f' + "\\ngot_luna_type=" + {argument_name}.dbg_luna_type_str()'
     error_message_cpp = f'({error_message_cpp}).c_str()'
 
     return ''.join([
@@ -434,7 +433,7 @@ def generate_copy_of_function_cpp(function: Function, source: str) -> str:
 
 
 def generate_deserialization_check_cpp(
-        function_name: str,
+        function: str,
         file: str,
         line: int,
         serialized_argument_name: str,
@@ -448,9 +447,11 @@ def generate_deserialization_check_cpp(
     buffer_variable_name = '_buf'
     deserialized_argument_name = '_deserialized'
 
+    # TODO re-calculate and compare buffer size
     error_message_cpp = '"' + '\\n'.join([
-        'error_code=SEM##',
-        f'where={file}:{line} {function_name}',
+        f'error_code={error_codes.ERROR_CPP_SERIALIZED_BUFFER_MISMATCH}',
+        f'cpp_where={file} {line} {function}',
+        f'cpp_type={serialized_argument_type}',
         f'message=serialized buffers differ after deserialization',
     ]) + '"'
 
@@ -664,7 +665,7 @@ def instrument_cpp(
                         type_checks.append(generate_user_type_check_cpp(
                             file=file,
                             line=function.location.line,
-                            function_name=function.name,
+                            function=generate_signature_cpp(function),
                             argument_name=argument_name,
                             type_name=type_name
                         ))
@@ -698,7 +699,7 @@ def instrument_cpp(
                         lines=generate_deserialization_check_cpp(
                             file=file,
                             line=line,
-                            function_name=function.name,
+                            function=generate_signature_cpp(function),
                             serialized_argument_name=function.arguments[0].name,
                             serialized_argument_type=function.arguments[0].type,
                             buffer_argument_name=function.arguments[1].name,
@@ -742,7 +743,7 @@ def instrument_cpp(
             hash_checks.append(generate_hash_check_cpp(
                 file=file,
                 line=function.location.line,
-                function_name=function.name,
+                function=generate_signature_cpp(function),
                 argument_name=argument_name
             ))
 

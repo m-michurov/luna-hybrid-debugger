@@ -8,6 +8,7 @@ from typing import Final
 
 import click
 
+import error_codes
 from adapt_file_paths import C_ASSERT_CPP_PATH
 from adapt_function_names import ASSERT_NAME_C, ASSERT_NAME_LUNA
 
@@ -380,7 +381,7 @@ def generate_loop_assertions(
             }
 
             error_message = '\n'.join([
-                'error_code=SEM##',
+                f'error_code={error_codes.ERROR_LUNA_LOOP_BOUNDS_MISMATCH}',
                 f'base_name={base_name}',
                 f'where={ti.file_name(use_loop_position)}:{ti.line_number(use_loop_position)} for',
                 f'init_first={ja_expression_to_str(init_first)}',
@@ -448,7 +449,7 @@ def generate_init_condition_assertions(ja: dict, ti: TextInfo) -> tuple[int, dic
 
         for body in use_bodies:
             error_message = '\n'.join([
-                'error_code=SEM##',
+                f'error_code={error_codes.ERROR_LUNA_INIT_CONDITION_FALSE}',
                 f'name={name}',
                 f'where={ti.file_name(if_position)}:{ti.line_number(if_position)} if',
                 f'condition={ja_expression_to_str(init_condition)}',
