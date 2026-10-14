@@ -1,4 +1,4 @@
-# luna-assert-generator
+# luna-hybrid-debugger
 
 Средство автоматизированного инструментирования LuNA-программ для обнаружения семантических ошибок. 
 
@@ -19,16 +19,16 @@ sudo ln -s libclang-18.so.1 libclang.so
 ```bash
 (.venv) $ pip install requirements.txt
 ```
- * Необходимо установить `LUNA_ASSERT_GENERATOR_HOME` в путь к проекту и добавить `$LUNA_ASSERT_GENERATOR_HOME` в `PATH`
+ * Необходимо установить `LUNA_HYBRID_DEBUGGER_HOME` в путь к проекту и добавить `$LUNA_HYBRID_DEBUGGER_HOME` в `PATH`
 
 ## Использование
 
-`luna-assert-generator` позволяет выполнять инструментирование 
+`luna-hybrid-debugger` позволяет выполнять инструментирование 
 всей программы (код на LuNA и C++) одной командой. 
 
 ```bash
-$ luna-assert-generator --help
-Usage: luna-assert-generator.py [OPTIONS] FA_PATH [FA_ARGS]...
+$ luna-hybrid-debugger --help
+Usage: luna-hybrid-debugger.py [OPTIONS] FA_PATH [FA_ARGS]...
 
 Options:
   --build-dir DIRECTORY   Directory for build files.  [default: build]
@@ -45,10 +45,10 @@ Options:
   --help                  Show this message and exit.
 ```
 
-По умолчанию `luna-assert-generator` выполняет инструментирование кода и сразу же запускает модифицированную 
+По умолчанию `luna-hybrid-debugger` выполняет инструментирование кода и сразу же запускает модифицированную 
 программу с переданными аргументами, например:
 ```bash
-$ luna-assert-generator tests/01_for/03_simple_bounds_from_program_args/main.fa 10
+$ luna-hybrid-debugger tests/01_for/03_simple_bounds_from_program_args/main.fa 10
 Instrumenting LuNA code in "tests/01_for/03_simple_bounds_from_program_args"...
 ...
 Running modified program:
@@ -56,56 +56,18 @@ Running modified program:
 ```
 
 При использовании ключа `--instrument-only` модифицированная программа не будет запущена. Вместо этого 
-`luna-assert-generator` напечатает полную команду для запуска, например:
+`luna-hybrid-debugger` напечатает полную команду для запуска, например:
 ```bash
-$ ./luna-assert-generator --instrument-only tests/01_for/03_simple_bounds_from_program_args/main.fa 10
-Instrumenting LuNA code in "/home/mmichurov/Projects/luna-assert-generator/tests/01_for/03_simple_bounds_from_program_args"...
+$ ./luna-hybrid-debugger --instrument-only tests/01_for/03_simple_bounds_from_program_args/main.fa 10
+Instrumenting LuNA code in "/home/mmichurov/Projects/luna-hybrid-debugger/tests/01_for/03_simple_bounds_from_program_args"...
 ...
 Run modified program with:
-cd /home/mmichurov/Projects/luna-assert-generator/tests/01_for/03_simple_bounds_from_program_args/instrumented ; rm -f .adapt_error_*.dat ; /home/mmichurov/Projects/luna-assert-generator/luna_after_ja/luna -g --build-dir=/home/mmichurov/Projects/luna-assert-generator/tests/01_for/03_simple_bounds_from_program_args/instrumented/build --no-cleanup /home/mmichurov/Projects/luna-assert-generator/tests/01_for/03_simple_bounds_from_program_args/instrumented/main.fa 10 ; cd $OLDPWD
+cd /home/mmichurov/Projects/luna-hybrid-debugger/tests/01_for/03_simple_bounds_from_program_args/instrumented ; rm -f .adapt_error_*.dat ; /home/mmichurov/Projects/luna-hybrid-debugger/luna_after_ja/luna -g --build-dir=/home/mmichurov/Projects/luna-hybrid-debugger/tests/01_for/03_simple_bounds_from_program_args/instrumented/build --no-cleanup /home/mmichurov/Projects/luna-hybrid-debugger/tests/01_for/03_simple_bounds_from_program_args/instrumented/main.fa 10 ; cd $OLDPWD
 ```
 
 Ниже отдельно описаны возможности по работе с LuNA и C++-кодом. 
 
 ### 1. Автоматическое инструментирование LuNA-кода
-
-Пример использования:
-```bash
-$ python3 instrument_luna.py tests/01_for/01_simple/
-Generated 2 assertion(s).
-Run modified program with:
-./luna_after_ja/luna --build-dir=./tests/01_for/01_simple/instrumented/build --no-cleanup ./tests/01_for/01_simple/instrumented/main.fa
-```
-
-Запуск программы:
-```bash
-$ ./luna_after_ja/luna --build-dir=./tests/01_for/01_simple/instrumented/build --no-cleanup ./tests/01_for/01_simple/instrumented/main.fa
-5
-7
-8
-6
-10
-9
-1
-3
-4
-5
-2
-6
-8
-9
-10
-7
-luna: fatal error: run-time error: errcode=-6
-err> Assertion failed: (((M / 2) <= 1) && ((M + 1) <= N)) (init bounds for y)
-err> Assertion failed: ((0 <= 1) && (M <= N)) (init bounds for x)
-err> terminate called after throwing an instance of 'std::runtime_error'
-err> terminate called after throwing an instance of 'std::runtime_error'
-err>   what():  generated assertion failed
-err>   what():  generated assertion failed
-err> [MS-7B53:04590] *** Process received signal ***
-err> 
-```
 
 Выполняется генерация проверок на следующие ошибки:
  * В цикле for используются индексы ФД, которые не были инициализированы (см. [tests/01_for/01_simple/main.fa](tests/01_for/01_simple/main.fa)).
@@ -116,49 +78,7 @@ err>
 
  * При использовании одиночного ФД не выполняется условие инициализации (см. [tests/02_if/01_simple/main.fa](tests/02_if/01_simple/main.fa)).
 
-### 1. Автоматическое инструментирование С++-кода
-
-Пример использования:
-```bash
-$ python3 instrument_cpp.py tests/03_immutability/01_input_df_modified/ucodes.cpp
-Applying 21 edits
-Generated 0 type initializations.
-Generated 0 type checks (skipped 0 redundant checks).
-Generated 15 hash initializations.
-Generated 15 hash checks.
-Generated 0 deserialization checks.
-See /home/mmichurov/Projects/luna-assert-generator/tests/03_immutability/01_input_df_modified/instrumented/ucodes.cpp.
-```
-
-Запуск программы:
-```bash
-$ luna tests/03_immutability/01_input_df_modified/instrumented/jacobi.fa 100 100 1 1
-eps: 0.000000010
-luna: fatal error: run-time error: errcode=-6
-err> Assertion failed: File ucodes.cpp, function update_subgrid_no_edges: input parameter prev_df changed
-err> terminate called after throwing an instance of 'std::runtime_error'
-err>   what():  generated assertion failed
-err> [MS-7B53:06942] *** Process received signal ***
-err> [MS-7B53:06942] Signal: Aborted (6)
-err> [MS-7B53:06942] Signal code:  (-6)
-err> [MS-7B53:06942] [ 0] /lib/x86_64-linux-gnu/libc.so.6(+0x45330)[0x7c6fc5845330]
-err> [MS-7B53:06942] [ 1] /lib/x86_64-linux-gnu/libc.so.6(pthread_kill+0x11c)[0x7c6fc589eb2c]
-err> [MS-7B53:06942] [ 2] /lib/x86_64-linux-gnu/libc.so.6(gsignal+0x1e)[0x7c6fc584527e]
-err> [MS-7B53:06942] [ 3] /lib/x86_64-linux-gnu/libc.so.6(abort+0xdf)[0x7c6fc58288ff]
-err> [MS-7B53:06942] [ 4] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xa5ff5)[0x7c6fc5ca5ff5]
-err> [MS-7B53:06942] [ 5] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xbb0da)[0x7c6fc5cbb0da]
-err> [MS-7B53:06942] [ 6] /lib/x86_64-linux-gnu/libstdc++.so.6(_ZSt10unexpectedv+0x0)[0x7c6fc5ca5a55]
-err> [MS-7B53:06942] [ 7] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xbb391)[0x7c6fc5cbb391]
-err> [MS-7B53:06942] [ 8] /home/mmichurov/Apps/luna/build/programs/home/mmichurov/Projects/luna-assert-generator/tests/03_immutability/01_input_df_modified/instrumented/jacobi.fa/libucodes.so(+0x5996)[0x7c6fc6049996]
-err> [MS-7B53:06942] [ 9] /home/mmichurov/Apps/luna/build/programs/home/mmichurov/Projects/luna-assert-generator/tests/03_immutability/01_input_df_modified/instrumented/jacobi.fa/libucodes.so(_Z8block_41R2CF+0xfc)[0x7c6fc605d66c]
-err> [MS-7B53:06942] [10] /home/mmichurov/Apps/luna/lib/librts.so(+0x4b7d3)[0x7c6fc60c87d3]
-err> [MS-7B53:06942] [11] /home/mmichurov/Apps/luna/lib/libcpu_threadpool.so(_ZN13CPUThreadPool7routineEv+0x17c)[0x7c6fc607431c]
-err> [MS-7B53:06942] [12] /lib/x86_64-linux-gnu/libstdc++.so.6(+0xecdb4)[0x7c6fc5cecdb4]
-err> [MS-7B53:06942] [13] /lib/x86_64-linux-gnu/libc.so.6(+0x9caa4)[0x7c6fc589caa4]
-err> [MS-7B53:06942] [14] /lib/x86_64-linux-gnu/libc.so.6(+0x129c6c)[0x7c6fc5929c6c]
-err> [MS-7B53:06942] *** End of error message ***
-err>
-```
+### 2. Автоматическое инструментирование С++-кода
 
 Выполняется генерация проверок на следующие ошибки:
  * Входной параметр атомарного ФК изменен (см. [tests/03_immutability/01_input_df_modified/ucodes.cpp](tests/03_immutability/01_input_df_modified/ucodes.cpp)).
@@ -177,17 +97,7 @@ err>
 Если имеется информация о зависимостях по данным между атомарными ФК 
 (см. [tests/04_user_type/04_simple_ok_redundant/ddg.json](tests/04_user_type/04_simple_ok_redundant/ddg.json), 
 [tests/04_user_type/05_simple_ok_redundant_partial/ddg.json](tests/04_user_type/05_simple_ok_redundant_partial/ddg.json)),
-это можно указать с помощью ключа `--atomic-ddg`, например:
-```bash
-$ python3 instrument_cpp.py tests/04_user_type/04_simple_ok_redundant/ucodes.cpp --atomic-ddg ddg.json
-Applying 11 edits
-Generated 2 type initializations.
-Generated 0 type checks (skipped 3 redundant checks).
-Generated 3 hash initializations.
-Generated 3 hash checks.
-Generated 0 deserialization checks.
-See /home/mmichurov/Projects/luna-assert-generator/tests/04_user_type/04_simple_ok_redundant/instrumented/ucodes.cpp.
-```
+это можно указать с помощью ключа `--atomic-ddg`.
 Если можно установить, что входной параметр может принимать только значения ожидаемого типа, проверка для него не генерируется.
 
  * Некорректная сериализация/десериализация (см. [tests/05_serialization](tests/05_serialization)). 
