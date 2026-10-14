@@ -35,15 +35,11 @@ void f4_deserialize(f4 &x, const void *buf) {
 }
 
 extern "C" {
-#pragma adapt user_type(xx, f4)
     void c_init_f4(OutputDF &xx, double v1, double v2, double v3, double v4) {
         auto x = f4{v1, v2, v3, v4};
         f4_serialize(x, xx.create(f4_serialized_size(x)));
     }
 
-#pragma adapt user_type(xx, f4)
-#pragma adapt user_type(yy, f4)
-#pragma adapt user_type(zz, f4)
     void c_axpy_f4(double a, const InputDF &xx, const InputDF &yy, OutputDF &zz) {
         f4 x, y, z;
 
@@ -56,7 +52,6 @@ extern "C" {
         c_init_f4(zz, a*x.v1+y.v1, a*x.v2+y.v2, a*x.v3+y.v3, a*x.v4+y.v4);
     }
 
-#pragma adapt user_type(xx, f4)
     void c_print_f4(const InputDF &xx) {
         f4 x, y, z;
 
