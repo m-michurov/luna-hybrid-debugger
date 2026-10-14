@@ -86,8 +86,7 @@ ERRORS_FILE_PATH_DEFAULT: Final[Path] = Path('errors.json')
     required=False,
     show_default=True,
     default=None,
-    help=f'Append errors list to existing file or create a new errors file. '
-         f'If not absolute, resolved relative to {OPTION_OUTPUT_DIR}.',
+    help=f'Append errors list to existing file or create a new errors file.',
     type=click.Path(
         dir_okay=False,
         resolve_path=False,
@@ -184,6 +183,8 @@ def main(
         )
         print(p.stdout.decode())
         print(p.stderr.decode())
+
+        print(f'See "{errors_file}"')
     except subprocess.CalledProcessError as e:
         print(e.stderr.decode(), file=sys.stderr)
         return 1
