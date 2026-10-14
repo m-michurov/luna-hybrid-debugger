@@ -1,9 +1,19 @@
 #pragma once
 
 #include <cstdint>
+#include "ucenv.h"
 
-static inline uint64_t _adapt_hash(const void* data, std::size_t len)
+using namespace luna::ucenv;
+
+static inline uint64_t _adapt_hash(const InputDF &df)
 {
+    if (df.get_type() != ValueType::TYPE_VALUE) {
+        return 0;
+    }
+
+    const void *data = df.get_data();
+    const std::size_t len = df.get_size();
+
     const uint8_t* p = (const uint8_t*)data;
 
     uint64_t hash = 14695981039346656037ULL; // offset basis

@@ -349,7 +349,7 @@ def get_declared_type(cursor: cindex.Cursor) -> str:
 
 
 def generate_hash_call_cpp(argument_name: str) -> str:
-    return f'{HASH_NAME_C}({argument_name}.get_data(), {argument_name}.get_size())'
+    return f'{HASH_NAME_C}({argument_name})'
 
 
 def generate_hash_variable_name_cpp(argument_name: str) -> str:
