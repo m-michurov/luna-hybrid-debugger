@@ -33,6 +33,25 @@ def find_initializers(df_id: Id, cf_info: dict[Id, CF]) -> set[Id]:
     }
 
 
+def strip_code_line_to_name(code_line: str) -> str:
+    code_line = code_line.strip()
+    tokens = code_line.split()
+
+    if tokens[0] in ['for', 'while', 'if', 'let']:
+        return tokens[0]
+
+    if tokens[0] == 'cf':
+        code_line = code_line[code_line.find(':')+1:].strip()
+        tokens = code_line.split()
+
+    if tokens[0] == 'sub':
+        return tokens[1][:tokens[1].find('(')].strip()
+
+    if '(' in tokens[0]:
+        tokens[0] = tokens[0][:tokens[0].find('(')]
+
+    return tokens[0].strip()
+
 # TODO format name to remove excessive info such as function parameters
 def call_stack_readable_to_json(call_stack: list[str]) -> list[dict[str, str | int]]:
     # parsing "code line (maybe with spaces) [file:line]"
@@ -43,7 +62,7 @@ def call_stack_readable_to_json(call_stack: list[str]) -> list[dict[str, str | i
         result.append({
             'file': file,
             'line': int(line_str),
-            'name': code_line,
+            'name': strip_code_line_to_name(code_line),
         })
     return result
 
