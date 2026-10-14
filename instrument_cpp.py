@@ -3,19 +3,17 @@ from __future__ import annotations
 import dataclasses
 import json
 import re
-import shutil
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Final, TypeAlias
 
-import click
 from clang import cindex
 
-from adapt_file_paths import C_HASH_HEADER_PATH, C_ASSERT_HEADER_PATH, REQUIRED_FILE_PATHS
-from adapt_function_names import HASH_NAME_C, ASSERT_NAME_C
 import error_codes
+from file_paths import C_HASH_HEADER_PATH, C_ASSERT_HEADER_PATH
+from adapt_function_names import HASH_NAME_C, ASSERT_NAME_C
 
 cindex.Config.set_library_file('/usr/lib/llvm-18/lib/libclang.so')  # adjust path
 
@@ -588,8 +586,8 @@ def load_data_dependencies(path: Path, functions: list[Function]) -> dict[str, d
 
 def instrument_cpp(
         cpp_path: Path,
-        instrumented_path: Path,
-        data_dependencies_path: Path,
+        output_dir: Path,
+        data_dependencies_file_path: Path,
 ) -> None:
     index = cindex.Index.create()
     translation_unit = index.parse(cpp_path, args=[
@@ -606,8 +604,8 @@ def instrument_cpp(
            and function.body is not None
     ]
 
-    if data_dependencies_path is not None and data_dependencies_path.exists():
-        data_dependencies = load_data_dependencies(data_dependencies_path, functions)
+    if data_dependencies_file_path is not None and data_dependencies_file_path.exists():
+        data_dependencies = load_data_dependencies(data_dependencies_file_path, functions)
     else:
         data_dependencies = {}
 
@@ -619,12 +617,12 @@ def instrument_cpp(
         Edit(position=0, text=f'#include "{C_ASSERT_HEADER_PATH.name}"\n'),
     ]
 
-    generated_type_checks_count = 0
-    skipped_redundant_type_checks_count = 0
-    generated_type_assignments_count = 0
-    generated_hash_checks_count = 0
-    generated_hash_initializations_count = 0
-    generated_deserialization_checks_count = 0
+    type_checks_count = 0
+    redundant_type_checks_count = 0
+    type_assignments_count = 0
+    immutability_checks_count = 0
+    hash_initializations_count = 0
+    deserialization_checks_count = 0
 
     pragmas: dict[Function, list[Pragma]] = {
         function: parse_function_pragmas(source_lines, function)
@@ -635,7 +633,8 @@ def instrument_cpp(
         closing_bracket_indent = get_source_indentation(source, function.body.extent.end)
         generated_indent = 4 + closing_bracket_indent
 
-        file = Path(str(function.location.file)).name
+        # file = Path(str(function.location.file)).name
+        file = str(function.location.file)
         line = function.location.line
 
         body_start = function.body.extent.start.offset
@@ -651,12 +650,12 @@ def instrument_cpp(
             hash_checks.append(generate_hash_check_cpp(
                 file=file,
                 line=function.location.line,
-                function=generate_signature_cpp(function),
+                function=function.name,
                 argument_name=argument_name
             ))
 
-        generated_hash_checks_count += len(hash_checks)
-        generated_hash_initializations_count += len(hash_initializations)
+        immutability_checks_count += len(hash_checks)
+        hash_initializations_count += len(hash_initializations)
 
         if hash_initializations:
             edits.append(Edit.from_lines(position=body_start + 1, lines=hash_initializations, indent=generated_indent))
@@ -679,13 +678,13 @@ def instrument_cpp(
                                 pragmas=pragmas,
                                 data_dependencies=data_dependencies,
                         ):
-                            skipped_redundant_type_checks_count += 1
+                            redundant_type_checks_count += 1
                             continue
 
                         type_checks.append(generate_user_type_check_cpp(
                             file=file,
                             line=function.location.line,
-                            function=generate_signature_cpp(function),
+                            function=function.name,
                             argument_name=argument_name,
                             type_name=type_name
                         ))
@@ -719,7 +718,7 @@ def instrument_cpp(
                         lines=generate_deserialization_check_cpp(
                             file=file,
                             line=line,
-                            function=generate_signature_cpp(function),
+                            function=function.name,
                             serialized_argument_name=function.arguments[0].name,
                             serialized_argument_type=function.arguments[0].type,
                             buffer_argument_name=function.arguments[1].name,
@@ -745,116 +744,25 @@ def instrument_cpp(
                         text=f'\n{generate_copy_of_function_cpp(serialize_function_nonrec, source)}'
                     ))
 
-                    generated_deserialization_checks_count += 1
+                    deserialization_checks_count += 1
 
-        generated_type_checks_count += len(type_checks)
-        generated_type_assignments_count += len(type_assignments)
+        type_checks_count += len(type_checks)
+        type_assignments_count += len(type_assignments)
 
         if type_checks:
             edits.append(Edit.from_lines(position=body_start + 1, lines=type_checks, indent=generated_indent))
         if type_assignments:
             edits.append(Edit.from_lines(position=body_start + 1, lines=type_assignments, indent=generated_indent))
 
-    print(f'Applying {len(edits)} edits')
-
     source = apply_edits(source, edits)
 
-    dst_cpp_path = instrumented_path / cpp_path.name
-    dst_cpp_path.write_text(source, encoding='utf-8')
-
-    print(f'Generated {generated_type_assignments_count} type initializations.')
-    print(
-        f'Generated {generated_type_checks_count} type checks (skipped {skipped_redundant_type_checks_count} redundant checks).')
-    print(f'Generated {generated_hash_initializations_count} hash initializations.')
-    print(f'Generated {generated_hash_checks_count} hash checks.')
-    print(f'Generated {generated_deserialization_checks_count} deserialization checks.')
-    print(f'See {dst_cpp_path}.')
-
-
-@click.command()
-@click.argument(
-    'cpp-path',
-    nargs=1,
-    type=click.Path(
-        dir_okay=False,
-        resolve_path=True,
-        path_type=Path,
-    )
-)
-@click.option(
-    '--output-dir',
-    required=False,
-    show_default=True,
-    default=Path('instrumented'),
-    help='Directory for program output.',
-    type=click.Path(
-        file_okay=False,
-        resolve_path=True,
-        path_type=Path,
-    )
-)
-@click.option(
-    '--atomic-ddg',
-    required=False,
-    help='A JSON file containing information about data dependencies between atomic CF arguments.',
-    type=click.Path(
-        dir_okay=False,
-        resolve_path=True,
-        path_type=Path,
-    )
-)
-def main(
-        cpp_path: Path,
-        output_dir: Path,
-        atomic_ddg: Path | None = None,
-) -> None:
-    run(
-        cpp_path=cpp_path,
-        output_dir=output_dir,
-        atomic_ddg=atomic_ddg,
-    )
-
-
-def run(
-        cpp_path: Path,
-        output_dir: Path,
-        atomic_ddg: Path,
-        standalone: bool = True,
-) -> None:
-    if output_dir.exists() and not output_dir.is_dir():
-        raise NotADirectoryError()
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    if standalone:
-        project_path = cpp_path.parent
-        shutil.copytree(
-            src=project_path,
-            dst=output_dir,
-            ignore=lambda _1, _2: [output_dir.name],
-            dirs_exist_ok=True
-        )
+    dst_cpp_path = output_dir / cpp_path.name
+    dst_cpp_path.write_text(source, encoding='utf-8')
 
-        for path in REQUIRED_FILE_PATHS:
-            shutil.copyfile(src=path, dst=output_dir / path.name)
-
-    instrument_cpp(cpp_path, output_dir, atomic_ddg)
-
-    if not standalone:
-        return
-
-    print('Run modified program with:')
-    print(f'cd {output_dir} ;', end=' ')
-    print(f'rm -f adapt_error_*.dat ;', end=' ')
-    print(
-        'luna',
-        '-g',
-        *(str(it.resolve()) for it in output_dir.iterdir() if it.suffix == '.fa'),
-        ';',
-        sep=' ',
-        end=' '
-    )
-    print(f'cd -')
-
-
-if __name__ == '__main__':
-    main()
+    print(f'Generated:')
+    print(f'    {type_checks_count} user type checks (skipped {redundant_type_checks_count} redundant checks)')
+    print(f'    {immutability_checks_count} immutability checks')
+    print(f'    {deserialization_checks_count} deserialization checks')
+    print(f'Instrumented code written to "{dst_cpp_path}"')

@@ -1,8 +1,8 @@
 #!/usr/bin/bash
 
-if [[ -z "${LUNA_ASSERT_GENERATOR_HOME}" ]]; then
+if [[ -z "${LUNA_HYBRID_DEBUGGER_HOME}" ]]; then
   SCRIPT_DIR=$( cd -- "$( dirname -- "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )
-  LUNA_ASSERT_GENERATOR_HOME="$SCRIPT_DIR"
+  LUNA_HYBRID_DEBUGGER_HOME="$SCRIPT_DIR"
 fi
 
-"$LUNA_ASSERT_GENERATOR_HOME/.venv/bin/python3" "$LUNA_ASSERT_GENERATOR_HOME"/luna-hybrid-debugger.py "$@"
+"$LUNA_HYBRID_DEBUGGER_HOME/.venv/bin/python3" "$LUNA_HYBRID_DEBUGGER_HOME"/luna-hybrid-debugger.py "$@"
