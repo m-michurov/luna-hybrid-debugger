@@ -473,7 +473,7 @@ def instrument_luna(
         fa_args: list[str],
         build_dir: Path,
         output_dir: Path,
-        found_errors: Path | None = None,
+        found_errors_path: Path | None = None,
 ) -> None:
     luna_ja_only_path = resolve_relative_to(Path('luna_ja_only', 'luna'), root=HYBRID_DEBUGGER_HOME).resolve()
 
@@ -498,15 +498,17 @@ def instrument_luna(
         print(e.stderr.decode(), file=sys.stderr)
         sys.exit(1)
 
-    if found_errors.exists():
-        print(f'Attempting to use {found_errors} to only generate necessary checks')
+    found_errors = None
+    if found_errors_path is not None:
+        print(f'Attempting to use "{found_errors_path}" to only generate necessary checks')
+        found_errors = json.loads(found_errors_path.read_text(encoding='utf-8'))
 
     text_info = TextInfo(json.loads(build_dir.joinpath('preprocessed.fa.ti').read_text(encoding='utf-8')))
 
     loop_assertions_count, ja_with_assertions = generate_loop_assertions(
         ja=json.loads(build_dir.joinpath('program_foreign.ja').read_text(encoding='utf-8')),
         ti=text_info,
-        found_errors=json.loads(found_errors.read_text(encoding='utf-8')) if found_errors.exists() else None,
+        found_errors=found_errors,
     )
     condition_assertions_count, ja_with_assertions = generate_init_condition_assertions(
         ja=ja_with_assertions,
