@@ -113,7 +113,7 @@ def main(
     if output_dir is None:
         output_dir = project_path / '.hybrid-debugger'
 
-    if project_path.samefile(output_dir):
+    if project_path.resolve() == output_dir.resolve():
         print(f'ERROR: Output directory "{output_dir}" is the same as project directory.')
         return 1
 
@@ -123,14 +123,19 @@ def main(
 
     build_dir = output_dir / 'build'
 
+    print(f'Copying required files:')
     for path in REQUIRED_C_FILE_PATHS:
+        dst = output_dir / path.name
+        print(f'    {path.name} \t-> "{dst}"')
         shutil.copyfile(path, output_dir / path.name)
 
+    print(f'Copying project files:')
     for path in project_path.iterdir():
         if path.resolve() == output_dir.resolve():
             continue
 
         dst = output_dir / path.name
+        print(f'    "{path}" \t-> "{dst}"')
 
         if path.is_dir():
             shutil.copytree(path, dst)
