@@ -5,9 +5,10 @@ from typing import Final, Iterable, Any
 import click
 
 import error_codes
-from trace.dtypes import Id, CF, CodeMetaInformation
-from trace.formatting import call_history as call_stack_readable, full_df_name
-from trace.load import load_meta_info, load_cf_info, load_id_map
+
+from luna_trace.dtypes import Id, CF, CodeMetaInformation
+from luna_trace.formatting import call_history as call_stack_readable, full_df_name
+from luna_trace.load import load_meta_info, load_cf_info, load_id_map
 
 DEFAULT_BUILD_DIR: Final[str] = 'build'
 
@@ -52,7 +53,7 @@ def strip_code_line_to_name(code_line: str) -> str:
 
     return tokens[0].strip()
 
-# TODO format name to remove excessive info such as function parameters
+
 def call_stack_readable_to_json(call_stack: list[str]) -> list[dict[str, str | int]]:
     # parsing "code line (maybe with spaces) [file:line]"
     result = []
