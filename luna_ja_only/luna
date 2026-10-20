@@ -7,8 +7,6 @@
 
 import sys, os, subprocess, json, re, datetime, signal, shutil
 
-sys.path.append(os.path.join(os.environ['LUNA_HOME'], 'scripts'))
-
 from common import *
 from work_json_file import read_json_file, write_json_file
 import importlib.util

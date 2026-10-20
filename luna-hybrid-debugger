@@ -5,4 +5,4 @@ if [[ -z "${LUNA_HYBRID_DEBUGGER_HOME}" ]]; then
   LUNA_HYBRID_DEBUGGER_HOME="$SCRIPT_DIR"
 fi
 
-"$LUNA_HYBRID_DEBUGGER_HOME/.venv/bin/python3" "$LUNA_HYBRID_DEBUGGER_HOME"/luna-hybrid-debugger.py "$@"
+PYTHONPATH=$LUNA_HOME/scripts:$PYTHONPATH "$LUNA_HYBRID_DEBUGGER_HOME/.venv/bin/python3" "$LUNA_HYBRID_DEBUGGER_HOME"/luna-hybrid-debugger.py "$@"
