@@ -130,7 +130,13 @@ def main(
         if path.resolve() == output_dir.resolve():
             continue
 
-        shutil.copy(path, output_dir / path.name)
+        dst = output_dir / path.name
+
+        if path.is_dir():
+            shutil.copytree(path, dst)
+            continue
+
+        shutil.copyfile(path, dst)
 
     cpp_paths = [it for it in project_path.iterdir() if it.suffix in ['.C', '.cpp', '.cc']]
     for cpp_path in cpp_paths:
@@ -159,14 +165,16 @@ def main(
         no_cleanup = True
 
     run_command = ' '.join([
-        f'cd {output_dir.resolve()}',
+        f'(export PYTHONPATH=$LUNA_HOME/scripts:$PYTHONPATH',
+        f'&& cd {output_dir.resolve()}',
         f'&& rm -f adapt_error_*.dat',
         f'&& {luna_after_ja_path} -g --build-dir={str(build_dir.resolve())} --no-cleanup',
         str(instrumented_fa_path.resolve()),
         *fa_args,
         f'; cd $OLDPWD',
         f'&& {PYTHON_EXECUTABLE_PATH} {FORMAT_ERRORS_PATH} --errors-file {str(errors_file.resolve())} {str(output_dir.resolve())}',
-        f'&& rm -rf {output_dir.resolve()}' if not no_cleanup else ''
+        f'&& rm -rf {output_dir.resolve()}' if not no_cleanup else '',
+        ')'
     ])
 
     if instrument_only:
