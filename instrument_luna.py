@@ -101,8 +101,11 @@ def print_statement(statement: dict, indent: int = 0) -> None:
             assert False, 'unknown statement'
 
 
-def find_init_loops(sub: dict, program: dict) -> dict[str, list[tuple[list, dict]]]:
-    result: dict[str, list[tuple[list, dict]]] = {}
+def find_simple_init_loops(sub: dict, program: dict) -> dict[str, list[tuple[list, dict, dict]]]:
+    """
+    :return: {DF_NAME: [(BODY_CONTAINING_FOR, FOR, INIT_STATEMENT), ...], ...}
+    """
+    result: dict[str, list[tuple[list, dict, dict]]] = {}
 
     for statement in sub['body']:
         if statement['type'] != 'for':
@@ -129,7 +132,7 @@ def find_init_loops(sub: dict, program: dict) -> dict[str, list[tuple[list, dict
                 if index['ref'] != [for_var_name]:
                     continue
 
-                result[base_name] = result.get(base_name, []) + [(sub['body'], statement)]
+                result[base_name] = result.get(base_name, []) + [(sub['body'], statement, body_statement)]
 
     return result
 
@@ -147,11 +150,11 @@ def refs_in_operands(expr: dict) -> list[list]:
     return result
 
 
-def find_use_loops(sub: dict, program: dict) -> dict[str, list[tuple[list, dict]]]:
+def find_simple_use_loops(sub: dict, program: dict) -> dict[str, list[tuple[list, dict, dict]]]:
     """
-    :return: {DF_NAME: [(BODY_CONTAINING_FOR, FOR), ...], ...}
+    :return: {DF_NAME: [(BODY_CONTAINING_FOR, FOR, USE_STATEMENT), ...], ...}
     """
-    result: dict[str, list[tuple[list, dict]]] = {}
+    result: dict[str, list[tuple[list, dict, dict]]] = {}
 
     for statement in sub['body']:
         if statement['type'] != 'for':
@@ -187,7 +190,7 @@ def find_use_loops(sub: dict, program: dict) -> dict[str, list[tuple[list, dict]
                     if index['ref'] != [for_var_name]:
                         continue
 
-                    result[base_name] = result.get(base_name, []) + [(sub['body'], statement)]
+                    result[base_name] = result.get(base_name, []) + [(sub['body'], statement, body_statement)]
 
     return result
 
@@ -250,21 +253,55 @@ def is_error_loop_in_main(error_loop: dict) -> bool:
     return True
 
 
+# FIXME also match init/use statement since one loop can contain multiple
 def find_matching_program_loop(
         error_loop: dict,
         name: str,
-        program_loops: dict[str, list[tuple[list, dict]]],
+        program_loops: dict[str, list[tuple[list, dict, dict]]],
         ti: TextInfo
-) -> tuple[list, dict] | None:
+) -> tuple[list, dict, dict] | None:
     error_loop_where = error_loop['where']
     error_loop_line = error_loop_where[1]['line']
 
-    for body, init_loop in program_loops[name]:
-        line = ti.line_number(init_loop['begin'])
+    for body, loop, init_or_use_statement in program_loops[name]:
+        line = ti.line_number(loop['begin'])
         if line != error_loop_line:
             continue
 
-        return body, init_loop
+        return body, loop, init_or_use_statement
+
+
+def generate_luna_string_literal(value: str) -> dict:
+    return {
+        'is_expr': True,
+        'type': 'sconst',
+        'value': value
+    }
+
+
+def generate_luna_icast(expr: dict) -> dict:
+    return {
+        'is_expr': True,
+        'type': 'icast',
+        'expr': expr
+    }
+
+
+def generate_luna_plus(*args: dict) -> dict:
+    assert len(args) >= 1
+
+    match args:
+        case [e1]:
+            return e1
+        case [e1, *rest] if rest:
+            return {
+                'is_expr': True,
+                'op_pos': 0,
+                'operands': [e1, generate_luna_plus(*rest)],
+                'type': '+'
+            }
+        case _:
+            raise NotImplementedError()
 
 
 # TODO handle init/use loops in subs - pass loop bounds as parameters if needed
@@ -277,6 +314,10 @@ def generate_loop_assertions(
         found_errors: list[dict] | None = None,
 ) -> tuple[int, dict]:
     assertions_count = 0
+
+    main_position = ja['main']['begin']
+    main_file = ti.file_name(main_position)
+    main_line = ti.line_number(main_position)
 
     ja_with_assertions = ja
     ja_with_assertions[ASSERT_NAME_LUNA] = {
@@ -294,8 +335,8 @@ def generate_loop_assertions(
         'type': 'extern'
     }
 
-    init_loops: dict[str, list[tuple[list, dict]]] = find_init_loops(ja['main'], ja)
-    use_loops: dict[str, list[tuple[list, dict]]] = find_use_loops(ja['main'], ja)
+    init_loops: dict[str, list[tuple[list, dict, dict]]] = find_simple_init_loops(ja['main'], ja)
+    use_loops: dict[str, list[tuple[list, dict, dict]]] = find_simple_use_loops(ja['main'], ja)
 
     # Filter use loops to only include those mentioned in SEM3.3 errors
     if found_errors is not None:
@@ -339,16 +380,57 @@ def generate_loop_assertions(
         assert len(name_use_loops) > 0
         assert len(init_loops[base_name]) > 0
         assert len(init_loops[base_name]) == 1, f'{base_name} has {len(init_loops[base_name])} init loops'
-        _, init_loop = init_loops[base_name][0]
+        _, init_loop, init_statement = init_loops[base_name][0]
+
+        init_loop_position = init_loop['begin']
+        init_statement_position = init_statement['begin']
+        init_statement_code = init_statement['code']
 
         init_first = init_loop['first']
         init_last = init_loop['last']
 
-        for body, use_loop in name_use_loops:
+        init_where = format_call_stack([
+            (main_file, main_line, 'main'),
+            (ti.file_name(init_loop_position), ti.line_number(init_loop_position), 'for'),
+            (ti.file_name(init_statement_position), ti.line_number(init_statement_position), init_statement_code),
+        ])
+
+        for body, use_loop, use_statement in name_use_loops:
             use_loop_position = use_loop['begin']
+            use_statement_position = use_statement['begin']
+            use_statement_code = use_statement['code']
+
+            use_where = format_call_stack([
+                (main_file, main_line, 'main'),
+                (ti.file_name(use_loop_position), ti.line_number(use_loop_position), 'for'),
+                (ti.file_name(use_statement_position), ti.line_number(use_statement_position), use_statement_code),
+            ])
 
             use_first = use_loop['first']
             use_last = use_loop['last']
+
+            # TODO might not be the case?
+            declared = format_call_stack_item(main_file, main_line, 'main')
+
+            init_loop_var = init_loop['var']
+            init_name = f'{base_name}[{init_loop_var}]'
+            use_loop_var = use_loop['var']
+            use_name = f'{base_name}[{use_loop_var}]'
+
+            error_message = '\n'.join([
+                f'error_code={error_codes.ERROR_LUNA_LOOP_BOUNDS_MISMATCH}',
+                f'init_name={init_name}',
+                f'use_name={use_name}',
+                f'declared={declared}',
+                f'init_where={init_where}',
+                f'use_where={use_where}',
+                f'init_loop_var={init_loop_var}',
+                f'init_first={ja_expression_to_str(init_first)}',
+                f'init_last={ja_expression_to_str(init_last)}',
+                f'use_loop_var={use_loop_var}',
+                f'use_first={ja_expression_to_str(use_first)}',
+                f'use_last={ja_expression_to_str(use_last)}',
+            ])
 
             bounds_check_ja = {
                 'is_expr': True,
@@ -370,16 +452,6 @@ def generate_loop_assertions(
                 'op_pos': 0
             }
 
-            error_message = '\n'.join([
-                f'error_code={error_codes.ERROR_LUNA_LOOP_BOUNDS_MISMATCH}',
-                f'base_name={base_name}',
-                f'where={format_call_stack_item(ti.file_name(use_loop_position), ti.line_number(use_loop_position), "for")}',
-                f'init_first={ja_expression_to_str(init_first)}',
-                f'init_last={ja_expression_to_str(init_last)}',
-                f'use_first={ja_expression_to_str(use_first)}',
-                f'use_last={ja_expression_to_str(use_last)}',
-            ])
-
             asserts_ja = [
                 {
                     'type': 'exec',
@@ -387,11 +459,13 @@ def generate_loop_assertions(
                     'id': ['_l0'],
                     'args': [
                         bounds_check_ja,
-                        {
-                            'is_expr': True,
-                            'type': 'sconst',
-                            'value': error_message
-                        }
+                        generate_luna_plus(
+                            generate_luna_string_literal(error_message),
+                            generate_luna_string_literal('\ninit_first_value='), generate_luna_icast(init_first),
+                            generate_luna_string_literal('\ninit_last_value='), generate_luna_icast(init_last),
+                            generate_luna_string_literal('\nuse_first_value='), generate_luna_icast(use_first),
+                            generate_luna_string_literal('\nuse_last_value='), generate_luna_icast(use_last),
+                        )
                     ],
                     'rules': [],
                     'begin': 0

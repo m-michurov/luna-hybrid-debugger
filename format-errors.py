@@ -168,7 +168,101 @@ def main(
 
         match error_code:
             case error_codes.ERROR_LUNA_LOOP_BOUNDS_MISMATCH:
-                raise NotImplementedError(f'WARNING: Error code {error_code} is currently unsupported.')
+                init_local = error['init_name']
+                use_local = error['use_name']
+                declared = parse_call_stack(error['declared'])
+
+                init_where = parse_call_stack(error['init_where'])
+                use_where = parse_call_stack(error['use_where'])
+
+                init_loop_var = error['init_loop_var']
+                init_first = error['init_first']
+                init_last = error['init_last']
+                use_loop_var = error['use_loop_var']
+                use_first = error['use_first']
+                use_last = error['use_last']
+
+                init_first_value = error['init_first_value']
+                init_last_value = error['init_last_value']
+                use_first_value = error['use_first_value']
+                use_last_value = error['use_last_value']
+
+                df_name = init_local[:init_local.find('[')]
+                df = {
+                    'name': df_name,
+                    'declared': [[
+                        {
+                            'file': file,
+                            'line': line,
+                            'name': name
+                        }
+                        for file, line, name in declared
+                    ]]
+                }
+
+                init_df_ref = {
+                    'df': df,
+                    'true': init_local,
+                    'local': init_local,
+                    'where': [
+                        {
+                            'file': file,
+                            'line': line,
+                            'name': name
+                        }
+                        for file, line, name in init_where
+                    ],
+                }
+
+                # TODO assuming step=1 and offset=0
+                init_index_range = {
+                    'df': init_df_ref,
+                    'loop': {
+                        'var': init_loop_var,
+                        'first': init_first,
+                        'last': init_last,
+                    },
+                    'true_lower': init_first_value,
+                    'true_upper': init_last_value,
+                    'step': 1,
+                    'offset': 0,
+                }
+
+                use_df_ref = {
+                    'df': df,
+                    'true': use_local,
+                    'local': use_local,
+                    'where': [
+                        {
+                            'file': file,
+                            'line': line,
+                            'name': name
+                        }
+                        for file, line, name in use_where
+                    ],
+                }
+
+                # TODO assuming step=1 and offset=0
+                use_index_range = {
+                    'df': use_df_ref,
+                    'loop': {
+                        'var': use_loop_var,
+                        'first': use_first,
+                        'last': use_last,
+                    },
+                    'true_lower': use_first_value,
+                    'true_upper': use_last_value,
+                    'step': 1,
+                    'offset': 0,
+                }
+
+                adapt_errors.append({
+                    'error_code': error_code,
+                    'details': {
+                        'initialized': [init_index_range],
+                        'used': use_index_range
+                    }
+                })
             case error_codes.ERROR_LUNA_INIT_CONDITION_FALSE:
                 df_local = error['name']
                 df_declared = parse_call_stack(error['declared'])
@@ -190,6 +284,7 @@ def main(
                     ]]
                 }
 
+                # TODO local == true is an assumption that is not guaranteed to hold, same for initialized/used
                 adapt_errors.append({
                     'error_code': error_code,
                     'details': {
