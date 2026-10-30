@@ -14,6 +14,7 @@ from clang import cindex
 import error_codes
 from file_paths import C_HASH_HEADER_PATH, C_ASSERT_HEADER_PATH
 from adapt_function_names import HASH_NAME_C, ASSERT_NAME_C
+from internal_formatting import format_call_stack_item
 
 cindex.Config.set_library_file('/usr/lib/llvm-18/lib/libclang.so')  # adjust path
 
@@ -367,7 +368,7 @@ def generate_hash_check_cpp(
     error_message_cpp = 'std::string("'
     error_message_cpp += '\\n'.join([
         f'error_code={error_codes.ERROR_CPP_INPUT_ARGUMENT_CHANGED}',
-        f'cpp_where={file} {line} {function}',
+        f'cpp_where={format_call_stack_item(file, line, function)}',
         f'cpp_argument_name={argument_name}',
         f'message=input argument changed',
     ])
@@ -405,7 +406,7 @@ def generate_user_type_check_cpp(
     error_message_cpp = 'std::string("'
     error_message_cpp += '\\n'.join([
         f'error_code={error_codes.ERROR_CPP_USER_TYPE_MISMATCH}',
-        f'cpp_where={file} {line} {function}',
+        f'cpp_where={format_call_stack_item(file, line, function)}',
         f'cpp_argument_name={argument_name}',
         f'expected_user_type={type_name}',
         f'message=wrong or missing user type',
@@ -448,7 +449,7 @@ def generate_deserialization_check_cpp(
     # TODO re-calculate and compare buffer size
     error_message_cpp = '"' + '\\n'.join([
         f'error_code={error_codes.ERROR_CPP_SERIALIZED_BUFFER_MISMATCH}',
-        f'cpp_where={file} {line} {function}',
+        f'cpp_where={format_call_stack_item(file, line, function)}',
         f'cpp_type={serialized_argument_type}',
         f'message=serialized buffers differ after deserialization',
     ]) + '"'

@@ -3,12 +3,12 @@ from pathlib import Path
 from typing import Final, Iterable, Any
 
 import click
-
-import error_codes
-
 from luna_trace.dtypes import Id, CF, CodeMetaInformation
 from luna_trace.formatting import call_history as call_stack_readable, full_df_name
 from luna_trace.load import load_meta_info, load_cf_info, load_id_map
+
+import error_codes
+from internal_formatting import parse_call_stack_item, parse_call_stack
 
 DEFAULT_BUILD_DIR: Final[str] = 'build'
 
@@ -42,7 +42,7 @@ def strip_code_line_to_name(code_line: str) -> str:
         return tokens[0]
 
     if tokens[0] == 'cf':
-        code_line = code_line[code_line.find(':')+1:].strip()
+        code_line = code_line[code_line.find(':') + 1:].strip()
         tokens = code_line.split()
 
     if tokens[0] == 'sub':
@@ -168,14 +168,65 @@ def main(
 
         match error_code:
             case error_codes.ERROR_LUNA_LOOP_BOUNDS_MISMATCH:
-                print(f'WARNING: Error code {error_code} is currently unsupported.')
+                raise NotImplementedError(f'WARNING: Error code {error_code} is currently unsupported.')
             case error_codes.ERROR_LUNA_INIT_CONDITION_FALSE:
-                print(f'WARNING: Error code {error_code} is currently unsupported.')
+                df_local = error['name']
+                df_declared = parse_call_stack(error['declared'])
+                init_condition = error['init_condition']
+
+                init_where = parse_call_stack(error['init_where'])
+                use_where = parse_call_stack(error['use_where'])
+
+                df_name = df_local[:df_local.find('[')]
+                df = {
+                    'name': df_name,
+                    'declared': [[
+                        {
+                            'file': file,
+                            'line': line,
+                            'name': name
+                        }
+                        for file, line, name in df_declared
+                    ]]
+                }
+
+                adapt_errors.append({
+                    'error_code': error_code,
+                    'details': {
+                        'initialized': [{
+                            'df': df,
+                            'true': df_local,
+                            'local': df_local,
+                            'conditions': [init_condition],
+                            'where': [
+                                {
+                                    'file': file,
+                                    'line': line,
+                                    'name': name
+                                }
+                                for file, line, name in init_where
+                            ],
+                        }],
+                        'used': {
+                            'df': df,
+                            'true': df_local,
+                            'local': df_local,
+                            'where': [
+                                {
+                                    'file': file,
+                                    'line': line,
+                                    'name': name
+                                }
+                                for file, line, name in use_where
+                            ],
+                        }
+                    }
+                })
             case error_codes.ERROR_CPP_INPUT_ARGUMENT_CHANGED:
                 cpp_argument_name = error['cpp_argument_name']
 
                 cpp_where = error['cpp_where']
-                cpp_file, cpp_line, cpp_function_name = cpp_where.split(maxsplit=2)
+                cpp_file, cpp_line, cpp_function_name = parse_call_stack_item(cpp_where)
 
                 adapt_errors.append({
                     'error_code': error_code,
@@ -192,7 +243,7 @@ def main(
                 cpp_argument_name = error['cpp_argument_name']
 
                 cpp_where = error['cpp_where']
-                cpp_file, cpp_line, cpp_function_name = cpp_where.split(maxsplit=2)
+                cpp_file, cpp_line, cpp_function_name = parse_call_stack_item(cpp_where)
 
                 expected_user_type = error['expected_user_type']
                 got_user_type = error['got_user_type']
@@ -235,7 +286,7 @@ def main(
                 })
             case error_codes.ERROR_CPP_SERIALIZED_BUFFER_MISMATCH:
                 cpp_where = error['cpp_where']
-                cpp_file, cpp_line, cpp_function_name = cpp_where.split(maxsplit=2)
+                cpp_file, cpp_line, cpp_function_name = parse_call_stack_item(cpp_where)
 
                 cpp_type = error['cpp_type']
 

@@ -9,6 +9,7 @@ from typing import Final
 import error_codes
 from adapt_function_names import ASSERT_NAME_C, ASSERT_NAME_LUNA
 from file_paths import HYBRID_DEBUGGER_HOME
+from internal_formatting import format_call_stack, format_call_stack_item
 from path_utility import resolve_relative_to
 
 
@@ -191,8 +192,8 @@ def find_use_loops(sub: dict, program: dict) -> dict[str, list[tuple[list, dict]
     return result
 
 
-def find_conditional_single_inits(sub: dict, program: dict) -> dict[str, list[tuple[list, dict]]]:
-    result: dict[str, list[tuple[list, dict]]] = {}
+def find_conditional_single_inits(sub: dict, program: dict) -> dict[str, list[tuple[list, dict, dict]]]:
+    result: dict[str, list[tuple[list, dict, dict]]] = {}
 
     for statement in sub['body']:
         if statement['type'] != 'if':
@@ -211,13 +212,13 @@ def find_conditional_single_inits(sub: dict, program: dict) -> dict[str, list[tu
                     continue
 
                 ref = ja_expression_to_str(actual)
-                result[ref] = result.get(ref, []) + [(sub['body'], statement)]
+                result[ref] = result.get(ref, []) + [(sub['body'], statement, body_statement)]
 
     return result
 
 
-def find_single_uses(sub: dict, program: dict) -> dict[str, list[list]]:
-    result: dict[str, list[list]] = {}
+def find_single_uses(sub: dict, program: dict) -> dict[str, list[tuple[list, dict]]]:
+    result: dict[str, list[tuple[list, dict]]] = {}
 
     for statement in sub['body']:
         if statement['type'] == 'exec':
@@ -232,7 +233,7 @@ def find_single_uses(sub: dict, program: dict) -> dict[str, list[list]]:
                     continue
 
                 ref = ja_expression_to_str(actual)
-                result[ref] = result.get(ref, []) + [sub['body']]
+                result[ref] = result.get(ref, []) + [(sub['body'], statement)]
 
     return result
 
@@ -372,7 +373,7 @@ def generate_loop_assertions(
             error_message = '\n'.join([
                 f'error_code={error_codes.ERROR_LUNA_LOOP_BOUNDS_MISMATCH}',
                 f'base_name={base_name}',
-                f'where={ti.file_name(use_loop_position)} {ti.line_number(use_loop_position)} for',
+                f'where={format_call_stack_item(ti.file_name(use_loop_position), ti.line_number(use_loop_position), "for")}',
                 f'init_first={ja_expression_to_str(init_first)}',
                 f'init_last={ja_expression_to_str(init_last)}',
                 f'use_first={ja_expression_to_str(use_first)}',
@@ -406,6 +407,10 @@ def generate_loop_assertions(
 def generate_init_condition_assertions(ja: dict, ti: TextInfo) -> tuple[int, dict]:
     assertions_count = 0
 
+    main_position = ja['main']['begin']
+    main_file = ti.file_name(main_position)
+    main_line = ti.line_number(main_position)
+
     ja_with_assertions = ja
     ja_with_assertions[ASSERT_NAME_LUNA] = {
         'args': [
@@ -425,23 +430,45 @@ def generate_init_condition_assertions(ja: dict, ti: TextInfo) -> tuple[int, dic
     conditional_single_inits = find_conditional_single_inits(ja['main'], ja)
     single_uses = find_single_uses(ja['main'], ja)
 
-    for name, use_bodies in single_uses.items():
+    for name, uses in single_uses.items():
         if name not in conditional_single_inits:
             continue
 
         assert len(conditional_single_inits[name]) <= 1
-        _, single_init_condition = conditional_single_inits[name][0]
-        assert single_init_condition['type'] == 'if'
+        _, single_init_if, single_init = conditional_single_inits[name][0]
+        assert single_init_if['type'] == 'if'
 
-        if_position = single_init_condition['begin']
-        init_condition = single_init_condition['cond']
+        if_position = single_init_if['begin']
+        init_condition = single_init_if['cond']
 
-        for body in use_bodies:
+        init_position = single_init['begin']
+        init_code = single_init['code']
+
+        for body, single_use in uses:
+            use_position = single_use['begin']
+            use_code = single_use['code']
+
+            init_where = format_call_stack([
+                (main_file, main_line, 'main'),
+                (ti.file_name(if_position), ti.line_number(if_position), 'if'),
+                (ti.file_name(init_position), ti.line_number(init_position), init_code),
+            ])
+
+            use_where = format_call_stack([
+                (main_file, main_line, 'main'),
+                (ti.file_name(use_position), ti.line_number(use_position), use_code),
+            ])
+
+            # TODO might not be the case?
+            declared = format_call_stack_item(main_file, main_line, 'main')
+
             error_message = '\n'.join([
                 f'error_code={error_codes.ERROR_LUNA_INIT_CONDITION_FALSE}',
                 f'name={name}',
-                f'where={ti.file_name(if_position)} {ti.line_number(if_position)} if',
-                f'condition={ja_expression_to_str(init_condition)}',
+                f'init_where={init_where}',
+                f'init_condition={ja_expression_to_str(init_condition)}',
+                f'use_where={use_where}',
+                f'declared={declared}',
             ])
 
             asserts_ja = [
